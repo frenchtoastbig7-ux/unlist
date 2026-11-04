@@ -10,8 +10,8 @@ build/
 
 # Personal data never lives in the repo. The data directory defaults to ~/.unlist;
 # these patterns guard against anyone pointing UNLIST_DATA_DIR inside the checkout.
-data/
-reports/
+/data/
+/reports/
 *.db
 *.db-wal
 *.db-shm
