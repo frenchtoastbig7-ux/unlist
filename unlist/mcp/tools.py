@@ -387,3 +387,182 @@ def report_exposure(subject_id: str) -> str:
     except KeyError as exc:
         return str(exc)
     return f"# Exposure report: `{subject_id}`\n\n{body}\n\nWritten to {path}"
+
+
+# brokers ----------------------------------------------------------------------------
+
+
+def _catalog_brokers(ids: list[str]):
+    catalog = load_catalog()
+    if not ids:
+        return catalog.searchable()
+    out = []
+    for i in ids:
+        out.append(catalog.get(i))
+    return out
+
+
+def _browser(use_browser: bool):
+    if not use_browser:
+        return None
+    from unlist.scanners.brokers.browser import BrowserSession
+
+    return BrowserSession()
+
+
+def scan_brokers(subject_id: str, brokers: str = "", use_browser: bool = True) -> str:
+    """Search people-search sites for the subject's names and places. brokers: comma-
+    separated catalog ids, default every searchable site. Plain HTTP first; when a site
+    refuses, a visible Chromium window opens and does what you would do by hand (if it
+    shows a CAPTCHA, deal with it there; the tool waits). Listings become candidate
+    findings for you to confirm. Slow: several seconds per site. Needs consent."""
+    from unlist.scanners.brokers import scan_brokers as run_scan
+    from unlist.scanners.brokers.browser import BrowserUnavailable
+
+    ids = [b.strip() for b in brokers.split(",") if b.strip()]
+    try:
+        chosen = _catalog_brokers(ids)
+    except KeyError as exc:
+        return str(exc)
+    conn = _conn()
+    browser = None
+    note = ""
+    try:
+        try:
+            browser = _browser(use_browser)
+            if browser is not None:
+                browser.start()
+        except BrowserUnavailable as exc:
+            browser = None
+            note = f"\n- browser unavailable, HTTP only: {exc}"
+        try:
+            res = run_scan(conn, subject_id, brokers=chosen, browser=browser)
+        except ConsentError as exc:
+            return f"Refused: {exc}"
+    finally:
+        if browser is not None:
+            browser.close()
+    c = res.counts
+    lines = [
+        f"Broker scan run {res.run_id} for `{subject_id}`: {c['brokers']} site(s), {c['urls']} search(es); "
+        f"**{c['new_candidates']} new candidate(s)**, {c['seen']} already known, {c['reappeared']} reappeared, "
+        f"{c['below_threshold']} weak match(es) ignored.",
+        f"- fetched {c['fetched']}, via browser {c['browser']}, refused {c['refused']}, challenged {c['challenged']}, "
+        f"no results {c['no_results']}, errors {c['errors']}{note}",
+    ]
+    for n in res.notes:
+        lines.append(f"- {n}")
+    if c["new_candidates"] or c["reappeared"]:
+        lines.append("")
+        lines.append("Review with findings_list, then findings_confirm or findings_reject each id.")
+        lines.append(findings_list(subject_id, status="candidate"))
+    return "\n".join(lines)
+
+
+def findings_list(subject_id: str, status: str = "", broker: str = "") -> str:
+    """Listings found for a subject. status: candidate, confirmed, rejected, requested,
+    removed, reappeared (default all). Candidates need your verdict before any request."""
+    from unlist.scanners.brokers import findings as F
+
+    rows = F.list_for(_conn(), subject_id, status or None, broker or None)
+    if not rows:
+        return "No findings" + (f" with status {status}" if status else "") + " for this subject."
+    out = []
+    for r in rows:
+        ex = json.loads(r["extract_json"] or "{}")
+        out.append([
+            r["id"], r["broker_id"], r["status"], r["score"], ex.get("name_text", ""),
+            ex.get("age") or "", ", ".join(ex.get("places", [])[:3]), r["listing_url"][:80], r["last_seen"][:10],
+        ])
+    return table(["id", "broker", "status", "score", "name shown", "age", "places", "listing", "last seen"], out)
+
+
+def findings_show(finding_id: int) -> str:
+    """One finding in full: what the page showed, why it scored as it did, the evidence file."""
+    from unlist.scanners.brokers import findings as F
+
+    conn = _conn()
+    try:
+        r = F.get(conn, finding_id)
+    except KeyError as exc:
+        return str(exc)
+    ex = json.loads(r["extract_json"] or "{}")
+    cap = conn.execute("SELECT * FROM captures WHERE id=?", (r["capture_id"],)).fetchone() if r["capture_id"] else None
+    lines = [
+        f"# Finding {r['id']}: {r['broker_id']} ({r['status']}, score {r['score']})",
+        "",
+        f"- Listing: {r['listing_url']}",
+        f"- Name shown: {ex.get('name_text', '')}; age {ex.get('age') or '-'}",
+        f"- Places: {', '.join(ex.get('places', [])) or '-'}",
+        f"- Phones: {', '.join(ex.get('phones', [])) or '-'}",
+        f"- Score reasons: {', '.join(ex.get('reasons', []))}",
+        f"- First seen {r['first_seen']}, last seen {r['last_seen']}" + (f", verified {r['verified_at']}" if r["verified_at"] else ""),
+    ]
+    if r["note"]:
+        lines.append(f"- Note: {r['note']}")
+    if cap:
+        lines.append(f"- Evidence: {paths.data_dir() / cap['raw_path']}" + (f"; screenshot {paths.data_dir() / cap['shot_path']}" if cap["shot_path"] else ""))
+    if ex.get("snippet"):
+        lines += ["", "> " + ex["snippet"][:400]]
+    return "\n".join(lines)
+
+
+def _ids(text: str) -> list[int]:
+    return [int(x) for x in text.replace(",", " ").split() if x.strip().isdigit()]
+
+
+def findings_confirm(finding_ids: str, note: str = "") -> str:
+    """Mark findings (comma-separated ids) as yours. Only confirmed findings get requests."""
+    from unlist.scanners.brokers import findings as F
+
+    conn = _conn()
+    done = []
+    for fid in _ids(finding_ids):
+        try:
+            F.set_status(conn, fid, "confirmed", note or None)
+            done.append(fid)
+        except KeyError:
+            pass
+    return f"Marked confirmed: {done or 'nothing (ids not found)'}."
+
+
+def findings_reject(finding_ids: str, note: str = "") -> str:
+    """Mark findings (comma-separated ids) as someone else's. They are kept so the same
+    listing is not offered again."""
+    from unlist.scanners.brokers import findings as F
+
+    conn = _conn()
+    done = []
+    for fid in _ids(finding_ids):
+        try:
+            F.set_status(conn, fid, "rejected", note or None)
+            done.append(fid)
+        except KeyError:
+            pass
+    return f"Marked rejected: {done or 'nothing (ids not found)'}."
+
+
+def findings_verify(finding_ids: str, use_browser: bool = True) -> str:
+    """Open each listing again to see whether it is still there. gone moves the finding to
+    removed; a removed listing that is back becomes reappeared."""
+    from unlist.scanners.brokers import verify_finding
+    from unlist.scanners.brokers.browser import BrowserUnavailable
+
+    conn = _conn()
+    browser = None
+    try:
+        try:
+            browser = _browser(use_browser)
+        except BrowserUnavailable:
+            browser = None
+        rows = []
+        for fid in _ids(finding_ids):
+            try:
+                verdict, detail = verify_finding(conn, fid, browser=browser)
+            except (KeyError, ConsentError) as exc:
+                verdict, detail = "error", str(exc)
+            rows.append([fid, verdict, detail])
+    finally:
+        if browser is not None:
+            browser.close()
+    return table(["finding", "verdict", "detail"], rows) if rows else "No ids given."

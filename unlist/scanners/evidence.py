@@ -41,3 +41,33 @@ def record_fetch(
         note="; ".join(parts) or None,
     )
     return store.insert_capture(conn, row)
+
+
+def record_browser(
+    conn: sqlite3.Connection, tool: str, cap, note: str | None = None
+) -> int:
+    """A browser capture: HTML as the raw file, the screenshot beside it under shots/."""
+    data_dir = paths.data_dir()
+    sha = store.sha256_hex(cap.html)
+    raw_abs = store.raw_path_for(tool, sha, "html", cap.captured_at, data_dir)
+    store.write_raw(raw_abs, cap.html)
+    shot_rel = None
+    if cap.png:
+        shot_abs = store.raw_path_for(tool, sha, "png", cap.captured_at, data_dir)
+        shot_abs = data_dir / "shots" / shot_abs.relative_to(data_dir / "raw")
+        store.write_raw(shot_abs, cap.png)
+        shot_rel = str(shot_abs.relative_to(data_dir))
+    parts = [p for p in (note, cap.note, "challenged" if cap.challenged else None) if p]
+    row = store.CaptureRow(
+        tool=tool,
+        requested_url=cap.requested_url,
+        final_url=cap.final_url,
+        status=cap.status,
+        captured_at=cap.captured_at,
+        sha256=sha,
+        raw_path=str(raw_abs.relative_to(data_dir)),
+        shot_path=shot_rel,
+        kind="refusal" if cap.challenged else "browser",
+        note="; ".join(parts) or None,
+    )
+    return store.insert_capture(conn, row)

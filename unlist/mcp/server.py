@@ -44,6 +44,12 @@ TOOLS: list[tuple[Callable, str]] = [
     (tools.breaches_list, "Breach hits recorded for a subject, optionally only those first seen since an ISO date."),
     (tools.password_checks_list, "Results of Pwned Passwords checks made at the terminal (label and count only; passwords are never typed in chat)."),
     (tools.report_exposure, "Markdown exposure report for a subject: breaches, listings, requests, password checks; also written to the reports directory."),
+    (tools.scan_brokers, "Search people-search sites for the subject's names and places; HTTP first, a visible browser when refused. Listings become candidates to confirm. Slow. Needs consent."),
+    (tools.findings_list, "Listings found for a subject, optionally by status (candidate, confirmed, rejected, requested, removed, reappeared) or broker."),
+    (tools.findings_show, "One finding in full: what the page showed, score reasons, evidence paths."),
+    (tools.findings_confirm, "Mark findings as the subject's own (comma-separated ids). Only confirmed findings get removal requests."),
+    (tools.findings_reject, "Mark findings as someone else's (comma-separated ids)."),
+    (tools.findings_verify, "Re-open listings to see whether they are still there; gone moves a finding to removed, back again to reappeared."),
 ]
 
 
