@@ -1,17 +1,21 @@
 id: clustrmaps
 name: ClustrMaps
-hosts: [clustrmaps.com]
+hosts:
+- clustrmaps.com
 category: people-search
 search:
   method: url
-  template: "https://clustrmaps.com/persons/{first}-{last}"
+  template: https://clustrmaps.com/persons/{first}-{last}
   fetch: browser
 opt_out:
   method: form
   url: https://clustrmaps.com/bl/opt-out
-  requires: [listing_url, email_link]
+  requires:
+  - listing_url
+  - email_link
   captcha: unknown
 notes: Opt-out page did not answer a plain fetch on 2026-11-04 (connection error); check it in the browser.
+  Also unreachable from the built-in browser on 2026-11-04; the site may be down.
 sources:
-  - https://clustrmaps.com/bl/opt-out
-  - https://github.com/thumpersecure/opt-out-manual-2026
+- https://clustrmaps.com/bl/opt-out
+- https://github.com/thumpersecure/opt-out-manual-2026

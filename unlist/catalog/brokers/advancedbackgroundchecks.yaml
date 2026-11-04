@@ -1,16 +1,21 @@
 id: advancedbackgroundchecks
 name: Advanced Background Checks
-hosts: [advancedbackgroundchecks.com]
+hosts:
+- advancedbackgroundchecks.com
 category: people-search
 search:
   method: url
-  template: "https://www.advancedbackgroundchecks.com/names/{first}-{last}"
+  template: https://www.advancedbackgroundchecks.com/names/{first}-{last}
   fetch: browser
 opt_out:
   method: form
   url: https://www.advancedbackgroundchecks.com/removal
-  requires: [listing_url, email_link]
+  requires:
+  - listing_url
+  - email_link
   captcha: unknown
 sources:
-  - https://www.advancedbackgroundchecks.com/removal
-  - https://github.com/thumpersecure/opt-out-manual-2026
+- https://www.advancedbackgroundchecks.com/removal
+- https://github.com/thumpersecure/opt-out-manual-2026
+notes: Blocked the Claude built-in browser outright on 2026-11-04 (Cloudflare access denied); open it
+  from your usual browser if the tool's Chromium is blocked too.

@@ -1,17 +1,16 @@
 id: peekyou
 name: PeekYou
-hosts: [peekyou.com]
+hosts:
+- peekyou.com
 category: people-search
 search:
-  method: url
-  template: "https://www.peekyou.com/{first}_{last}"
-  fetch: browser
+  method: none
 opt_out:
-  method: form
-  url: https://www.peekyou.com/about/contact/optout/
-  requires: [listing_url, email_link]
-  captcha: unknown
-last_verified: 2026-11-04
+  method: unknown
 sources:
-  - https://www.peekyou.com/about/contact/optout/
-  - https://github.com/thumpersecure/opt-out-manual-2026
+- https://www.peekyou.com/about/contact/optout/
+- https://krebsonsecurity.com/2026/09/data-broker-radaris-loses-domains-in-privacy-fight/
+status: seized
+notes: Domain now controlled by Atlas Data Privacy after a Daniel's Law settlement (Atlas v. PeekYou,
+  N.J. Super. Ct. ESX-L-003299-25); the site shows only a notice as of 2026-11-04. Kept so old listings
+  are recognised.

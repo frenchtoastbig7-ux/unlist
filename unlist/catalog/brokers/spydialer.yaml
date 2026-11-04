@@ -1,13 +1,23 @@
 id: spydialer
 name: Spy Dialer
-hosts: [spydialer.com]
+hosts:
+- spydialer.com
 category: people-search
 opt_out:
   method: form
   url: https://www.spydialer.com/optout
-  requires: []
-  captcha: unknown
-last_verified: 2026-11-04
+  requires:
+  - email_link
+  captcha: other
+  form:
+    fields:
+      first: '#SubjectFirstNameInput'
+      last: '#SubjectLastNameInput'
+      email: '#SubjectEmailInput'
+    stop_before: '#OptOutForm1SubmitButton'
+    notes: Choose 'The subject of the request' in the requester dropdown and tick the consent box yourself.
+      Selectors read from the live page on 2026-11-04.
+last_verified: '2026-11-04'
 sources:
-  - https://www.spydialer.com/optout.aspx
-  - https://github.com/thumpersecure/opt-out-manual-2026
+- https://www.spydialer.com/optout.aspx
+- https://github.com/thumpersecure/opt-out-manual-2026

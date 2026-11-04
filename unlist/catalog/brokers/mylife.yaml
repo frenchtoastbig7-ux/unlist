@@ -1,19 +1,23 @@
 id: mylife
 name: MyLife
-hosts: [mylife.com]
+hosts:
+- mylife.com
 category: people-search
-contact: {privacy_email: privacy@mylife.com, privacy_url: https://www.mylife.com/privacy-policy}
+contact:
+  privacy_email: privacy@mylife.com
+  privacy_url: https://www.mylife.com/privacy-policy
 search:
   method: url
-  template: "https://www.mylife.com/pub-multisearch.pubview?search={first}%20{last}"
+  template: https://www.mylife.com/pub-multisearch.pubview?search={first}%20{last}
   fetch: browser
 opt_out:
-  method: form
-  url: https://www.mylife.com/ccpa/index.pubview
+  method: email
   email: privacy@mylife.com
-  requires: [listing_url]
+  requires:
+  - listing_url
   captcha: unknown
-  notes: Web form or an email to privacy@mylife.com with the listing URL; up to 15 days.
+  notes: The former CCPA web form (/ccpa/index.pubview) returned 404 on 2026-11-04; email the listing
+    URL to privacy@mylife.com.
 sources:
-  - https://www.mylife.com/ccpa/index.pubview
-  - https://github.com/yaelwrites/Big-Ass-Data-Broker-Opt-Out-List
+- https://www.mylife.com/ccpa/index.pubview
+- https://github.com/yaelwrites/Big-Ass-Data-Broker-Opt-Out-List

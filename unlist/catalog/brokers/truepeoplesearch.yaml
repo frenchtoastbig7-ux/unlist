@@ -1,18 +1,24 @@
 id: truepeoplesearch
 name: TruePeopleSearch
-hosts: [truepeoplesearch.com]
+hosts:
+- truepeoplesearch.com
 category: people-search
-contact: {privacy_url: https://www.truepeoplesearch.com/privacy}
+contact:
+  privacy_url: https://www.truepeoplesearch.com/privacy
 search:
   method: url
-  template: "https://www.truepeoplesearch.com/results?name={first}%20{last}&citystatezip={city}%2C%20{state}"
+  template: https://www.truepeoplesearch.com/results?name={first}%20{last}&citystatezip={city}%2C%20{state}
   fetch: browser
 opt_out:
   method: form
   url: https://www.truepeoplesearch.com/removal
-  requires: [listing_url, email_link]
-  captcha: recaptcha
+  requires:
+  - listing_url
+  - email_link
+  captcha: turnstile
   notes: Several CAPTCHAs in a row, then a confirmation link by email that must be clicked.
 sources:
-  - https://www.truepeoplesearch.com/removal
-  - https://github.com/yaelwrites/Big-Ass-Data-Broker-Opt-Out-List
+- https://www.truepeoplesearch.com/removal
+- https://github.com/yaelwrites/Big-Ass-Data-Broker-Opt-Out-List
+notes: Cloudflare challenge before the page loads (seen 2026-11-04); a normal browser profile usually
+  passes it, the tool waits for you.
