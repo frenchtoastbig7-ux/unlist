@@ -1,0 +1,17 @@
+id: searchpeoplefree
+name: SearchPeopleFree
+hosts: [searchpeoplefree.com]
+category: people-search
+search:
+  method: url
+  template: "https://www.searchpeoplefree.com/find/{first}-{last}/{state}"
+  fetch: browser
+opt_out:
+  method: form
+  url: https://www.searchpeoplefree.com/opt-out
+  requires: [listing_url, email_link]
+  captcha: unknown
+last_verified: 2026-11-04
+sources:
+  - https://www.searchpeoplefree.com/opt-out
+  - https://github.com/thumpersecure/opt-out-manual-2026

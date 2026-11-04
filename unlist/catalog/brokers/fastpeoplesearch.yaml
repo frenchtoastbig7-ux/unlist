@@ -1,0 +1,16 @@
+id: fastpeoplesearch
+name: FastPeopleSearch
+hosts: [fastpeoplesearch.com]
+category: people-search
+search:
+  method: url
+  template: "https://www.fastpeoplesearch.com/name/{first}-{last}_{city}-{state}"
+  fetch: browser
+opt_out:
+  method: form
+  url: https://www.fastpeoplesearch.com/removal
+  requires: [listing_url, email_link]
+  captcha: recaptcha
+sources:
+  - https://www.fastpeoplesearch.com/removal
+  - https://github.com/yaelwrites/Big-Ass-Data-Broker-Opt-Out-List

@@ -1,0 +1,16 @@
+id: advancedbackgroundchecks
+name: Advanced Background Checks
+hosts: [advancedbackgroundchecks.com]
+category: people-search
+search:
+  method: url
+  template: "https://www.advancedbackgroundchecks.com/names/{first}-{last}"
+  fetch: browser
+opt_out:
+  method: form
+  url: https://www.advancedbackgroundchecks.com/removal
+  requires: [listing_url, email_link]
+  captcha: unknown
+sources:
+  - https://www.advancedbackgroundchecks.com/removal
+  - https://github.com/thumpersecure/opt-out-manual-2026

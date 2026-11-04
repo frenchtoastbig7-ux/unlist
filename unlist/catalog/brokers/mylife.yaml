@@ -1,0 +1,19 @@
+id: mylife
+name: MyLife
+hosts: [mylife.com]
+category: people-search
+contact: {privacy_email: privacy@mylife.com, privacy_url: https://www.mylife.com/privacy-policy}
+search:
+  method: url
+  template: "https://www.mylife.com/pub-multisearch.pubview?search={first}%20{last}"
+  fetch: browser
+opt_out:
+  method: form
+  url: https://www.mylife.com/ccpa/index.pubview
+  email: privacy@mylife.com
+  requires: [listing_url]
+  captcha: unknown
+  notes: Web form or an email to privacy@mylife.com with the listing URL; up to 15 days.
+sources:
+  - https://www.mylife.com/ccpa/index.pubview
+  - https://github.com/yaelwrites/Big-Ass-Data-Broker-Opt-Out-List

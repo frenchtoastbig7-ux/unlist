@@ -1,0 +1,18 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+*.egg-info/
+
+# Personal data never lives in the repo. The data directory defaults to ~/.unlist;
+# these patterns guard against anyone pointing UNLIST_DATA_DIR inside the checkout.
+data/
+reports/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal

@@ -1,0 +1,17 @@
+id: peoplefinders
+name: PeopleFinders
+hosts: [peoplefinders.com]
+category: people-search
+contact: {privacy_email: privacy@peoplefinders.com}
+search:
+  method: url
+  template: "https://www.peoplefinders.com/people/{first}-{last}/{state}/{city}"
+  fetch: browser
+opt_out:
+  method: form
+  url: https://www.peoplefinders.com/opt-out
+  requires: [listing_url, email_link]
+  captcha: unknown
+sources:
+  - https://www.peoplefinders.com/opt-out
+  - https://github.com/yaelwrites/Big-Ass-Data-Broker-Opt-Out-List

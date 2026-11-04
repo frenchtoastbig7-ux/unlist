@@ -1,0 +1,16 @@
+id: familytreenow
+name: FamilyTreeNow
+hosts: [familytreenow.com]
+category: people-search
+search:
+  method: url
+  template: "https://www.familytreenow.com/search/genealogy/results?first={first}&last={last}&citystatezip={city}%2C%20{state}"
+  fetch: browser
+opt_out:
+  method: form
+  url: https://www.familytreenow.com/optout
+  requires: [listing_url]
+  captcha: unknown
+sources:
+  - https://www.familytreenow.com/optout
+  - https://github.com/thumpersecure/opt-out-manual-2026

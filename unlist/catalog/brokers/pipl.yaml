@@ -1,0 +1,15 @@
+id: pipl
+name: Pipl
+hosts: [pipl.com]
+category: other
+contact: {privacy_email: privacy@pipl.com, privacy_url: https://pipl.com/privacy-policy}
+opt_out:
+  method: form
+  url: https://pipl.com/personal-information-removal-request
+  email: privacy@pipl.com
+  requires: [email_link]
+  captcha: unknown
+  notes: Identity-resolution vendor; no public search, so nothing to scan. Request removal blind.
+last_verified: 2026-11-04
+sources:
+  - https://pipl.com/personal-information-removal-request

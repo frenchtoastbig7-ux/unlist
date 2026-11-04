@@ -1,0 +1,21 @@
+id: whitepages
+name: Whitepages
+hosts: [whitepages.com, 411.com]
+category: people-search
+contact: {privacy_url: https://www.whitepages.com/data-policy}
+search:
+  method: url
+  template: "https://www.whitepages.com/name/{first}-{last}/{city}-{state}"
+  fetch: browser
+opt_out:
+  method: form
+  url: https://www.whitepages.com/suppression-requests
+  requires: [listing_url, phone_code]
+  captcha: unknown
+  notes: >-
+    Paste the listing URL; Whitepages places an automated phone call with a verification
+    code to the number on the listing. The tool cannot answer that call.
+last_verified: 2026-11-04
+sources:
+  - https://www.whitepages.com/suppression-requests
+  - https://github.com/yaelwrites/Big-Ass-Data-Broker-Opt-Out-List

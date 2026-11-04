@@ -1,0 +1,18 @@
+id: beenverified
+name: BeenVerified
+aka: [PeopleLooker, PeopleSmart, NeighborWho, Ownerly, Bumper]
+hosts: [beenverified.com, peoplelooker.com, peoplesmart.com, neighborwho.com, ownerly.com, bumper.com]
+category: people-search
+contact: {privacy_email: privacy@beenverified.com, privacy_url: https://www.beenverified.com/privacy/}
+search:
+  method: none
+  notes: Search happens on the opt-out page itself; it is Cloudflare-gated, so use the browser.
+opt_out:
+  method: form
+  url: https://www.beenverified.com/app/optout/search
+  requires: [email_link]
+  captcha: turnstile
+  notes: One opt-out covers the sister sites listed under aka.
+sources:
+  - https://www.beenverified.com/app/optout/search
+  - https://github.com/yaelwrites/Big-Ass-Data-Broker-Opt-Out-List

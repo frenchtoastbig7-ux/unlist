@@ -1,0 +1,23 @@
+id: spokeo
+name: Spokeo
+hosts: [spokeo.com]
+category: people-search
+registry: {ca: null}
+contact: {privacy_email: privacy@spokeo.com, privacy_url: https://www.spokeo.com/privacy}
+search:
+  method: url
+  template: "https://www.spokeo.com/search?q={first}%20{last}&g={city}%2C%20{state}"
+  fetch: browser
+opt_out:
+  method: form
+  url: https://www.spokeo.com/optout
+  requires: [listing_url, email_link]
+  captcha: recaptcha
+  form:
+    fields: {listing_url: "input[name='url']", email: "input[type='email']"}
+    stop_before: "button[type='submit']"
+    notes: Selectors are a best guess; the tool stops before submit either way.
+  notes: Paste the listing URL and an email address; click the link in the confirmation email.
+sources:
+  - https://www.spokeo.com/optout
+  - https://github.com/yaelwrites/Big-Ass-Data-Broker-Opt-Out-List

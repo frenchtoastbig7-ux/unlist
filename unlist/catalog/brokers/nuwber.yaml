@@ -1,0 +1,17 @@
+id: nuwber
+name: Nuwber
+hosts: [nuwber.com]
+category: people-search
+search:
+  method: url
+  template: "https://nuwber.com/search?name={first}%20{last}"
+  fetch: browser
+opt_out:
+  method: form
+  url: https://nuwber.com/removal/link
+  requires: [listing_url, email_link]
+  captcha: unknown
+notes: Removed from BADBOOL on 2026-10-31 (reason not stated); check the site still operates.
+sources:
+  - https://nuwber.com/removal/link
+  - https://github.com/thumpersecure/opt-out-manual-2026

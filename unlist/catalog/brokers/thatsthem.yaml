@@ -1,0 +1,18 @@
+id: thatsthem
+name: ThatsThem
+aka: [Spokeo property]
+hosts: [thatsthem.com]
+category: people-search
+search:
+  method: url
+  template: "https://thatsthem.com/name/{first}-{last}/{city}-{state}"
+  fetch: browser
+opt_out:
+  method: form
+  url: https://thatsthem.com/optout
+  requires: [listing_url]
+  captcha: unknown
+notes: Listed as a Spokeo trading name in the California registry; its own opt-out page still applies.
+sources:
+  - https://thatsthem.com/optout
+  - https://github.com/thumpersecure/opt-out-manual-2026

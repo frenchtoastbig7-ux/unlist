@@ -1,0 +1,16 @@
+id: optoutprescreen
+name: OptOutPrescreen (Equifax, Experian, TransUnion, Innovis)
+hosts: [optoutprescreen.com]
+category: credit
+contact: {phone: 1-888-567-8688}
+opt_out:
+  method: form
+  url: https://www.optoutprescreen.com/
+  requires: []
+  captcha: unknown
+  notes: >-
+    Stops the credit bureaus selling your file for pre-approved credit and insurance offers.
+    The five-year opt-out is online; the permanent one needs a signed mailed form. The site asks
+    for a Social Security number as optional; the tool never enters one.
+sources:
+  - https://www.optoutprescreen.com/
