@@ -123,6 +123,29 @@ def password_check(label: str, password: str) -> None:
         click.echo(f"{label}: not found in Pwned Passwords.")
 
 
+@main.command("form-assist")
+@click.argument("request_id", type=int)
+@click.option("--timeout", default=1800, show_default=True, help="Seconds to wait for you.")
+@click.option("--headless", is_flag=True, hidden=True)
+def form_assist(request_id: int, timeout: int, headless: bool) -> None:
+    """Open a form request in a visible browser, prefill it, wait for you to finish."""
+    from unlist.mcp.server import _load_dotenv
+    from unlist.requests.form import run_form_assist
+
+    _load_dotenv()
+    click.echo(run_form_assist(request_id, timeout_s=timeout, headless=headless))
+
+
+@main.command("inbox-poll")
+def inbox_poll_cmd() -> None:
+    """Read the opt-out mailbox and act on replies (same as the MCP tool)."""
+    from unlist.mcp import tools
+    from unlist.mcp.server import _load_dotenv
+
+    _load_dotenv()
+    click.echo(tools.inbox_poll())
+
+
 @main.command("data-dir")
 def data_dir_cmd() -> None:
     """Print the data directory."""

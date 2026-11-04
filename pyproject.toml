@@ -47,7 +47,7 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B", "C4", "SIM", "RUF"]
 ignore = ["RUF012"]
-per-file-ignores = { "tests/**" = ["E501"], "unlist/mcp/**" = ["E501"] }
+per-file-ignores = { "tests/**" = ["E501"], "unlist/mcp/**" = ["E501"], "unlist/requests/inbox.py" = ["E501"], "unlist/requests/drop.py" = ["E501"] }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

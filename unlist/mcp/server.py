@@ -50,6 +50,18 @@ TOOLS: list[tuple[Callable, str]] = [
     (tools.findings_confirm, "Mark findings as the subject's own (comma-separated ids). Only confirmed findings get removal requests."),
     (tools.findings_reject, "Mark findings as someone else's (comma-separated ids)."),
     (tools.findings_verify, "Re-open listings to see whether they are still there; gone moves a finding to removed, back again to reappeared."),
+    (tools.requests_draft, "Draft removal requests: one per broker with confirmed findings, or one for a named broker. Law and channel chosen from residency and the catalog. Nothing is sent until approved."),
+    (tools.requests_draft_blind, "Draft email deletion requests to brokers with no known listing (catalog brokers with an email address), by category, capped."),
+    (tools.requests_list, "Removal requests by subject, state (or 'open') and broker."),
+    (tools.requests_show, "One request in full: letter text, listings, events, replies."),
+    (tools.requests_approve, "Approve drafted requests by id, or 'all'. The gate before anything is sent or opened."),
+    (tools.requests_send, "Send approved email requests from the opt-out mailbox; dry_run lists them instead."),
+    (tools.requests_mark, "Set a request's state by hand (completed, cancelled, failed, submitted...)."),
+    (tools.inbox_poll, "Read the opt-out mailbox: classify replies, follow confirmation links on broker hosts, update request states, surface the rest."),
+    (tools.form_open, "Open an approved form request in a visible browser, prefilled; you submit and close the window; before/after screenshots are kept."),
+    (tools.letter_write, "Render a mail-channel request as a PDF letter."),
+    (tools.drop_prepare, "California DROP: the exact profile to enter at the state platform."),
+    (tools.drop_record, "Record the DROP ID after submitting, to track the 45-day cycle."),
 ]
 
 

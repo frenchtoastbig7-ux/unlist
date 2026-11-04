@@ -52,8 +52,9 @@ def absorb(primary: Broker, registry_row: Broker) -> Broker:
             setattr(contact, field, getattr(registry_row.contact, field))
     update["contact"] = contact
     opt_out = primary.opt_out.model_copy()
-    if not opt_out.email and registry_row.opt_out.email:
-        opt_out.email = registry_row.opt_out.email
+    if not opt_out.email:
+        # A curated privacy address beats the registry's named contact person.
+        opt_out.email = primary.contact.privacy_email or registry_row.opt_out.email
     update["opt_out"] = opt_out
     update["disclosures"] = sorted(set(primary.disclosures) | set(registry_row.disclosures))
     aka = list(primary.aka)

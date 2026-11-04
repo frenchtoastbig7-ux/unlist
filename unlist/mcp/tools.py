@@ -123,7 +123,16 @@ def subject_list() -> str:
         consent = "none"
         if s.consent:
             consent = f"{s.consent.granted} to {s.consent.expires}"
-        rows.append([s.id, s.kind, s.label, s.residency_state or s.residency_country, len(s.identifiers), consent])
+        rows.append(
+            [
+                s.id,
+                s.kind,
+                s.label,
+                s.residency_state or s.residency_country,
+                len(s.identifiers),
+                consent,
+            ]
+        )
     if not rows:
         return "No subjects yet. Use subject_add."
     return table(["id", "kind", "label", "residency", "identifiers", "consent"], rows)
@@ -137,10 +146,12 @@ def subject_show(subject_id: str) -> str:
     except KeyError as exc:
         return str(exc)
     lines = [f"# {s.label} (`{s.id}`, {s.kind})", ""]
-    lines.append(f"- Residency: {s.residency_state or ''} {s.residency_country}; regime `{s.legal_regime}`")
+    lines.append(
+        f"- Residency: {s.residency_state or ''} {s.residency_country}; regime `{s.legal_regime}`"
+    )
     if s.consent:
         lines.append(
-            f"- Consent: {s.consent.holder}, \"{s.consent.instrument}\", {s.consent.granted} to "
+            f'- Consent: {s.consent.holder}, "{s.consent.instrument}", {s.consent.granted} to '
             f"{s.consent.expires}"
             + (f"; scope: {s.consent.scope_note}" if s.consent.scope_note else "")
         )
@@ -150,10 +161,21 @@ def subject_show(subject_id: str) -> str:
         lines.append(f"- Note: {s.note}")
     lines.append("")
     rows = [
-        [i.id, i.kind, i.value, "yes" if i.current else "past", json.dumps(i.meta) if i.meta else "", i.note]
+        [
+            i.id,
+            i.kind,
+            i.value,
+            "yes" if i.current else "past",
+            json.dumps(i.meta) if i.meta else "",
+            i.note,
+        ]
         for i in s.identifiers
     ]
-    lines.append(table(["id", "kind", "value", "current", "meta", "note"], rows) if rows else "No identifiers yet.")
+    lines.append(
+        table(["id", "kind", "value", "current", "meta", "note"], rows)
+        if rows
+        else "No identifiers yet."
+    )
     return "\n".join(lines)
 
 
@@ -180,7 +202,9 @@ def consent_grant(
         repo.grant_consent(subject_id, consent)
     except (KeyError, ValueError) as exc:
         return f"Not recorded: {exc}"
-    AuditLog().append("consent.grant", subject=subject_id, holder=holder, instrument=instrument, expires=expires)
+    AuditLog().append(
+        "consent.grant", subject=subject_id, holder=holder, instrument=instrument, expires=expires
+    )
     return f"Consent recorded for `{subject_id}`: {holder}, until {consent.expires} ({consent.days_left()} days)."
 
 
@@ -214,7 +238,9 @@ def identifier_add(
         if v:
             meta[k] = v
     try:
-        ident = Identifier(subject_id=subject_id, kind=kind, value=value, current=current, meta=meta, note=note)  # type: ignore[arg-type]
+        ident = Identifier(
+            subject_id=subject_id, kind=kind, value=value, current=current, meta=meta, note=note
+        )  # type: ignore[arg-type]
         ident = repo.add_identifier(subject_id, ident)
     except (KeyError, ValueError) as exc:
         return f"Not added: {exc}"
@@ -243,11 +269,26 @@ def catalog_list(category: str = "", searchable_only: bool = False, limit: int =
     if searchable_only:
         brokers = [b for b in brokers if b.searchable]
     rows = [
-        [b.id, b.name[:40], b.category, b.status, "yes" if b.searchable else "", b.opt_out.method, ",".join(b.opt_out.requires), b.origin]
+        [
+            b.id,
+            b.name[:40],
+            b.category,
+            b.status,
+            "yes" if b.searchable else "",
+            b.opt_out.method,
+            ",".join(b.opt_out.requires),
+            b.origin,
+        ]
         for b in brokers[:limit]
     ]
     head = f"{len(brokers)} brokers" + (f" (showing {limit})" if len(brokers) > limit else "")
-    return head + "\n\n" + table(["id", "name", "category", "status", "search", "opt-out", "requires", "origin"], rows)
+    return (
+        head
+        + "\n\n"
+        + table(
+            ["id", "name", "category", "status", "search", "opt-out", "requires", "origin"], rows
+        )
+    )
 
 
 def catalog_show(broker_id: str) -> str:
@@ -262,15 +303,31 @@ def catalog_show(broker_id: str) -> str:
     if b.aka:
         lines.append(f"- Also known as: {', '.join(b.aka)}")
     lines.append(f"- Hosts: {', '.join(b.hosts) or '(none)'}")
-    reg = [k for k, v in (("CA", b.registry.ca), ("VT", b.registry.vt), ("TX", b.registry.tx), ("OR", b.registry.or_)) if v]
+    reg = [
+        k
+        for k, v in (
+            ("CA", b.registry.ca),
+            ("VT", b.registry.vt),
+            ("TX", b.registry.tx),
+            ("OR", b.registry.or_),
+        )
+        if v
+    ]
     lines.append(f"- Registered: {', '.join(reg) or 'not in a state registry we import'}")
     c = b.contact
-    lines.append(f"- Contact: email {c.privacy_email or '-'}; privacy page {c.privacy_url or '-'}; phone {c.phone or '-'}")
+    lines.append(
+        f"- Contact: email {c.privacy_email or '-'}; privacy page {c.privacy_url or '-'}; phone {c.phone or '-'}"
+    )
     if c.postal:
         lines.append(f"- Postal: {c.postal}")
-    lines.append(f"- Search: {b.search.method}" + (f" `{b.search.template}` via {b.search.fetch}" if b.search.method == 'url' else ''))
+    lines.append(
+        f"- Search: {b.search.method}"
+        + (f" `{b.search.template}` via {b.search.fetch}" if b.search.method == "url" else "")
+    )
     o = b.opt_out
-    lines.append(f"- Opt-out: {o.method} {o.url or o.email or ''}; requires {', '.join(o.requires) or 'nothing special'}; captcha {o.captcha}")
+    lines.append(
+        f"- Opt-out: {o.method} {o.url or o.email or ''}; requires {', '.join(o.requires) or 'nothing special'}; captcha {o.captcha}"
+    )
     if o.notes:
         lines.append(f"  - {o.notes}")
     if b.disclosures:
@@ -290,7 +347,10 @@ def catalog_search(text: str) -> str:
         return f"No broker matches {text!r}."
     return table(
         ["id", "name", "category", "hosts", "opt-out"],
-        [[b.id, b.name[:40], b.category, ", ".join(b.hosts[:3]), b.opt_out_channel[:60]] for b in hits],
+        [
+            [b.id, b.name[:40], b.category, ", ".join(b.hosts[:3]), b.opt_out_channel[:60]]
+            for b in hits
+        ],
     )
 
 
@@ -301,8 +361,13 @@ def audit_tail(limit: int = 30) -> str:
     """Last entries of the hash-chained audit log, and whether the chain verifies."""
     log = AuditLog()
     ok, detail = log.verify()
-    rows = [[e["ts"][:19], e["event"], e.get("actor", ""), json.dumps(e.get("data", {}))[:100]] for e in log.entries(limit)]
-    return f"{'Chain intact' if ok else 'CHAIN BROKEN'}: {detail}\n\n" + (table(["time", "event", "actor", "data"], rows) if rows else "No entries yet.")
+    rows = [
+        [e["ts"][:19], e["event"], e.get("actor", ""), json.dumps(e.get("data", {}))[:100]]
+        for e in log.entries(limit)
+    ]
+    return f"{'Chain intact' if ok else 'CHAIN BROKEN'}: {detail}\n\n" + (
+        table(["time", "event", "actor", "data"], rows) if rows else "No entries yet."
+    )
 
 
 # breaches ---------------------------------------------------------------------------
@@ -367,12 +432,17 @@ def password_checks_list() -> str:
     """Results of Pwned Passwords checks run from the terminal with `unlist password-check`.
     Passwords are typed at a hidden prompt there, never in chat; only a label and the
     number of times the password appears in breaches are stored."""
-    rows = _conn().execute(
-        "SELECT * FROM password_checks ORDER BY checked_at DESC LIMIT 50"
-    ).fetchall()
+    rows = (
+        _conn()
+        .execute("SELECT * FROM password_checks ORDER BY checked_at DESC LIMIT 50")
+        .fetchall()
+    )
     if not rows:
         return "No password checks yet. Run `uv run unlist password-check` in a terminal."
-    return table(["label", "seen in breaches", "checked"], [[r["label"], r["pwned_count"], r["checked_at"]] for r in rows])
+    return table(
+        ["label", "seen in breaches", "checked"],
+        [[r["label"], r["pwned_count"], r["checked_at"]] for r in rows],
+    )
 
 
 def report_exposure(subject_id: str) -> str:
@@ -470,11 +540,23 @@ def findings_list(subject_id: str, status: str = "", broker: str = "") -> str:
     out = []
     for r in rows:
         ex = json.loads(r["extract_json"] or "{}")
-        out.append([
-            r["id"], r["broker_id"], r["status"], r["score"], ex.get("name_text", ""),
-            ex.get("age") or "", ", ".join(ex.get("places", [])[:3]), r["listing_url"][:80], r["last_seen"][:10],
-        ])
-    return table(["id", "broker", "status", "score", "name shown", "age", "places", "listing", "last seen"], out)
+        out.append(
+            [
+                r["id"],
+                r["broker_id"],
+                r["status"],
+                r["score"],
+                ex.get("name_text", ""),
+                ex.get("age") or "",
+                ", ".join(ex.get("places", [])[:3]),
+                r["listing_url"][:80],
+                r["last_seen"][:10],
+            ]
+        )
+    return table(
+        ["id", "broker", "status", "score", "name shown", "age", "places", "listing", "last seen"],
+        out,
+    )
 
 
 def findings_show(finding_id: int) -> str:
@@ -487,7 +569,11 @@ def findings_show(finding_id: int) -> str:
     except KeyError as exc:
         return str(exc)
     ex = json.loads(r["extract_json"] or "{}")
-    cap = conn.execute("SELECT * FROM captures WHERE id=?", (r["capture_id"],)).fetchone() if r["capture_id"] else None
+    cap = (
+        conn.execute("SELECT * FROM captures WHERE id=?", (r["capture_id"],)).fetchone()
+        if r["capture_id"]
+        else None
+    )
     lines = [
         f"# Finding {r['id']}: {r['broker_id']} ({r['status']}, score {r['score']})",
         "",
@@ -496,12 +582,16 @@ def findings_show(finding_id: int) -> str:
         f"- Places: {', '.join(ex.get('places', [])) or '-'}",
         f"- Phones: {', '.join(ex.get('phones', [])) or '-'}",
         f"- Score reasons: {', '.join(ex.get('reasons', []))}",
-        f"- First seen {r['first_seen']}, last seen {r['last_seen']}" + (f", verified {r['verified_at']}" if r["verified_at"] else ""),
+        f"- First seen {r['first_seen']}, last seen {r['last_seen']}"
+        + (f", verified {r['verified_at']}" if r["verified_at"] else ""),
     ]
     if r["note"]:
         lines.append(f"- Note: {r['note']}")
     if cap:
-        lines.append(f"- Evidence: {paths.data_dir() / cap['raw_path']}" + (f"; screenshot {paths.data_dir() / cap['shot_path']}" if cap["shot_path"] else ""))
+        lines.append(
+            f"- Evidence: {paths.data_dir() / cap['raw_path']}"
+            + (f"; screenshot {paths.data_dir() / cap['shot_path']}" if cap["shot_path"] else "")
+        )
     if ex.get("snippet"):
         lines += ["", "> " + ex["snippet"][:400]]
     return "\n".join(lines)
@@ -566,3 +656,340 @@ def findings_verify(finding_ids: str, use_browser: bool = True) -> str:
         if browser is not None:
             browser.close()
     return table(["finding", "verdict", "detail"], rows) if rows else "No ids given."
+
+
+# requests ---------------------------------------------------------------------------
+
+
+def _request_row(r) -> list[object]:
+    return [
+        r["id"],
+        r["broker_id"],
+        r["channel"],
+        r["basis"],
+        r["state"],
+        (r["deadline"] or "")[:10],
+        r["tag"],
+    ]
+
+
+def requests_draft(
+    subject_id: str,
+    broker: str = "",
+    finding_ids: str = "",
+    channel: str = "",
+    basis: str = "",
+    prefer_optout: bool = False,
+) -> str:
+    """Draft removal requests. With no broker: one request per broker that has confirmed or
+    reappeared findings and no open request. With broker (catalog id): one request for
+    it, over the given finding ids (comma-separated) or blind. channel: email, form, mail
+    (default from the catalog). basis: ccpa_delete, ccpa_optout, gdpr_art17, state_xx,
+    plain (default from residency). Drafts are not sent until requests_approve."""
+    from unlist.requests import draft_for_confirmed, draft_request
+
+    conn = _conn()
+    try:
+        if broker:
+            rows = [
+                draft_request(
+                    conn,
+                    subject_id,
+                    broker,
+                    _ids(finding_ids),
+                    channel=channel or None,
+                    basis=basis or None,
+                    prefer_optout=prefer_optout,
+                )
+            ]
+        else:
+            rows = draft_for_confirmed(
+                conn,
+                subject_id,
+                channel=channel or None,
+                basis=basis or None,
+                prefer_optout=prefer_optout,
+            )
+    except (ConsentError, KeyError, ValueError) as exc:
+        return f"Not drafted: {exc}"
+    if not rows:
+        return "Nothing to draft: no confirmed or reappeared findings without an open request."
+    out = [
+        f"Drafted {len(rows)} request(s). Read each with requests_show, then requests_approve the ids you want sent.",
+        "",
+    ]
+    out.append(
+        table(
+            ["id", "broker", "channel", "basis", "state", "deadline", "tag"],
+            [_request_row(r) for r in rows],
+        )
+    )
+    return "\n".join(out)
+
+
+def requests_draft_blind(
+    subject_id: str, category: str = "", only_registry: bool = True, limit: int = 50
+) -> str:
+    """Draft email deletion requests to brokers you have no listing for (every active
+    catalog broker with an email address and no open request). category: people-search,
+    marketing, background-check, credit, other; only_registry limits to California
+    registrants. limit caps the batch. Review and approve before anything is sent."""
+    from unlist.requests import draft_blind
+
+    conn = _conn()
+    try:
+        rows = draft_blind(
+            conn, subject_id, category=category or None, only_registry=only_registry, limit=limit
+        )
+    except (ConsentError, KeyError, ValueError) as exc:
+        return f"Not drafted: {exc}"
+    if not rows:
+        return "Nothing to draft: every matching broker already has an open request."
+    return f"Drafted {len(rows)} blind request(s): ids {rows[0]['id']} to {rows[-1]['id']}. Use requests_list state=drafted, then requests_approve."
+
+
+def requests_list(subject_id: str = "", state: str = "", broker: str = "") -> str:
+    """Removal requests. state: drafted, approved, sent, submitted, awaiting_verification,
+    acknowledged, completed, verified_removed, failed, reappeared, cancelled, overdue, or
+    open (everything not closed)."""
+    from unlist.requests.engine import list_for
+
+    rows = list_for(_conn(), subject_id or None, state or None, broker or None)
+    if not rows:
+        return "No requests match."
+    return table(
+        ["id", "broker", "channel", "basis", "state", "deadline", "tag"],
+        [_request_row(r) for r in rows],
+    )
+
+
+def requests_show(request_id: int) -> str:
+    """One request in full: the letter as it will go (or went), listings, events, replies."""
+    from unlist.requests.engine import events_for, get
+
+    conn = _conn()
+    try:
+        r = get(conn, request_id)
+    except KeyError as exc:
+        return str(exc)
+    lines = [
+        f"# Request {r['id']}: {r['broker_id']} ({r['channel']}, {r['basis']}, **{r['state']}**)",
+        "",
+        f"- Tag: {r['tag']}; created {r['created_at']}"
+        + (f"; sent {r['sent_at']}" if r["sent_at"] else "")
+        + (f"; deadline {r['deadline']}" if r["deadline"] else ""),
+        f"- To: {r['to_address'] or r['form_url'] or r['drop_id'] or '-'}",
+        f"- Listings: {', '.join(json.loads(r['listings_json'] or '[]')) or 'none (blind request)'}",
+    ]
+    if r["note"]:
+        lines.append(f"- Note: {r['note']}")
+    ev = events_for(conn, request_id)
+    if ev:
+        lines += [
+            "",
+            "Events:",
+            table(
+                ["at", "kind", "detail"],
+                [[e["at"][:16], e["kind"], (e["detail"] or "")[:100]] for e in ev],
+            ),
+        ]
+    replies = conn.execute(
+        "SELECT * FROM inbox_messages WHERE request_id=? ORDER BY id", (request_id,)
+    ).fetchall()
+    if replies:
+        lines += [
+            "",
+            "Replies:",
+            table(
+                ["received", "from", "subject", "class", "action"],
+                [
+                    [
+                        (m["received_at"] or "")[:16],
+                        m["from_addr"],
+                        m["subject"][:60],
+                        m["classification"],
+                        (m["action"] or "")[:80],
+                    ]
+                    for m in replies
+                ],
+            ),
+        ]
+    if r["body"]:
+        lines += ["", f"Subject: {r['subject_line']}", "", "```", r["body"].rstrip(), "```"]
+    return "\n".join(lines)
+
+
+def requests_approve(request_ids: str) -> str:
+    """Approve drafted requests (comma-separated ids, or 'all' for every draft). Email
+    requests are then sent by requests_send; form requests are opened by form_open."""
+    from unlist.requests import approve
+    from unlist.requests.engine import list_for
+
+    conn = _conn()
+    ids = (
+        [r["id"] for r in list_for(conn, None, "drafted")]
+        if request_ids.strip().lower() == "all"
+        else _ids(request_ids)
+    )
+    rows = approve(conn, ids)
+    if not rows:
+        return "Nothing approved (ids not found or not in drafted state)."
+    by_channel: dict[str, list[int]] = {}
+    for r in rows:
+        by_channel.setdefault(r["channel"], []).append(r["id"])
+    parts = [f"Approved {len(rows)}: " + "; ".join(f"{ch} {ids}" for ch, ids in by_channel.items())]
+    if "email" in by_channel:
+        parts.append("Send the email ones with requests_send.")
+    if "form" in by_channel:
+        parts.append("Open each form one with form_open.")
+    if "mail" in by_channel:
+        parts.append("Render letters with letter_write.")
+    return " ".join(parts)
+
+
+def requests_send(request_ids: str = "", dry_run: bool = False) -> str:
+    """Send approved email requests from the opt-out mailbox (UNLIST_SMTP_* in .env).
+    Default: every approved email request; or comma-separated ids. dry_run shows what
+    would go without sending. Only approved requests are ever sent."""
+    from unlist.requests import send_approved
+    from unlist.requests.engine import list_for
+    from unlist.requests.mailer import FakeMailer, Mailer, SmtpSettings
+
+    conn = _conn()
+    ids = _ids(request_ids) or None
+    if dry_run:
+        rows = list(list_for(conn, None, "approved")) if ids is None else []
+        if ids:
+            from unlist.requests.engine import get as _get
+
+            rows = [_get(conn, i) for i in ids]
+        rows = [r for r in rows if r["channel"] == "email"]
+        return "Would send:\n" + (
+            table(
+                ["id", "to", "subject"],
+                [[r["id"], r["to_address"], r["subject_line"]] for r in rows],
+            )
+            if rows
+            else "nothing"
+        )
+    settings = SmtpSettings.from_env()
+    if settings is None:
+        return "No mailbox configured: set UNLIST_SMTP_HOST, UNLIST_SMTP_USER and UNLIST_SMTP_PASSWORD in .env (a mailbox created for opt-outs, never your main account)."
+    mailer: object = Mailer(settings) if not isinstance(settings, FakeMailer) else settings
+    results = send_approved(conn, mailer, ids)
+    if not results:
+        return "Nothing to send: no approved email requests."
+    return table(
+        ["id", "sent", "detail"],
+        [[rid, "yes" if ok else "no", detail] for rid, ok, detail in results],
+    )
+
+
+def requests_mark(request_id: int, state: str, note: str = "") -> str:
+    """Set a request's state by hand (e.g. completed after a reply you handled yourself,
+    cancelled, failed, submitted after a form you finished). States: drafted, approved,
+    sent, submitted, awaiting_verification, acknowledged, completed, verified_removed,
+    failed, reappeared, cancelled, overdue."""
+    from unlist.requests import set_state
+    from unlist.requests.engine import get, mark_sent
+
+    conn = _conn()
+    try:
+        if state in ("sent", "submitted") and not get(conn, request_id)["sent_at"]:
+            r = mark_sent(conn, request_id, state, note or None)
+        else:
+            r = set_state(conn, request_id, state, note or None)
+    except (KeyError, ValueError) as exc:
+        return str(exc)
+    return (
+        f"Request {r['id']} is now {r['state']}"
+        + (f" (deadline {r['deadline'][:10]})" if r["deadline"] else "")
+        + "."
+    )
+
+
+def inbox_poll(limit: int = 50) -> str:
+    """Read unseen mail in the opt-out mailbox (UNLIST_IMAP_* in .env), classify replies,
+    tie them to requests, follow confirmation links that point at the broker's own hosts,
+    and move request states. Anything else is surfaced for you."""
+    from unlist.requests.inbox import ImapInbox, ImapSettings, process_messages
+
+    settings = ImapSettings.from_env()
+    if settings is None:
+        return "No mailbox configured: set UNLIST_IMAP_HOST (and UNLIST_SMTP_USER/PASSWORD or UNLIST_IMAP_USER/PASSWORD) in .env."
+    conn = _conn()
+    try:
+        with ImapInbox(settings) as inbox:
+            messages = inbox.fetch_unseen(limit)
+            results = process_messages(conn, messages)
+            for m in messages:
+                inbox.mark_seen(m.uid)
+    except Exception as exc:
+        return f"Mailbox error: {exc}"
+    if not results:
+        return "No new messages."
+    return table(
+        ["from", "subject", "class", "request", "action"],
+        [
+            [r["from"], r["subject"][:50], r["kind"], r["request_id"] or "", r["action"][:90]]
+            for r in results
+        ],
+    )
+
+
+def form_open(request_id: int) -> str:
+    """Open an approved form request in a visible Chromium, prefilled from the broker's
+    playbook, and stop before submit. You finish it (submit, CAPTCHA, email link) and
+    close the window; the helper records before and after screenshots and marks the
+    request submitted when the page moved on. Runs as its own process."""
+    from unlist.requests.engine import get
+    from unlist.requests.form import launch_form_assist
+
+    conn = _conn()
+    try:
+        r = get(conn, request_id)
+    except KeyError as exc:
+        return str(exc)
+    if r["channel"] != "form":
+        return f"Request {request_id} is a {r['channel']} request."
+    if r["state"] not in ("approved", "awaiting_verification"):
+        return f"Request {request_id} is {r['state']}; approve it first."
+    pid = launch_form_assist(request_id)
+    return (
+        f"Opened a browser for request {request_id} ({r['broker_id']}) at {r['form_url']} (helper pid {pid}). "
+        "Finish the form there and close the window. Then requests_show to see what was recorded, "
+        "or requests_mark if the helper could not tell."
+    )
+
+
+def letter_write(request_id: int) -> str:
+    """Render a mail-channel request as a PDF letter under the data directory for printing."""
+    from unlist.requests.pdf import write_letter
+
+    try:
+        p = write_letter(_conn(), request_id)
+    except KeyError as exc:
+        return str(exc)
+    return f"Letter written to {p}. Post it, then requests_mark {request_id} sent."
+
+
+def drop_prepare(subject_id: str) -> str:
+    """For California residents: exactly what to enter at the state's DROP platform, which
+    every registered broker must honour on a 45-day cycle. The tool cannot submit it."""
+    from unlist.requests.drop import drop_profile
+
+    try:
+        return drop_profile(_conn(), subject_id)
+    except ConsentError as exc:
+        return f"Refused: {exc}"
+
+
+def drop_record(subject_id: str, drop_id: str) -> str:
+    """Record the 8-digit DROP ID after you submitted at DROP, so the cycle is tracked."""
+    from unlist.requests.drop import record_drop
+
+    try:
+        r = record_drop(_conn(), subject_id, drop_id)
+    except (ConsentError, ValueError) as exc:
+        return f"Not recorded: {exc}"
+    return f"DROP ID {r['drop_id']} recorded as request {r['id']}; brokers must act by {r['deadline'][:10]}."
