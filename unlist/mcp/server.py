@@ -40,6 +40,10 @@ TOOLS: list[tuple[Callable, str]] = [
     (tools.catalog_show, "Everything known about one broker: hosts, registry, contact, search template, opt-out method and requirements."),
     (tools.catalog_search, "Find brokers by name, alias, id or host."),
     (tools.audit_tail, "Last entries of the audit log and whether the hash chain verifies."),
+    (tools.scan_breaches, "Look up the subject's email addresses in breach databases (HIBP with key, LeakCheck, XposedOrNot). Breach names and data classes only. Needs consent."),
+    (tools.breaches_list, "Breach hits recorded for a subject, optionally only those first seen since an ISO date."),
+    (tools.password_checks_list, "Results of Pwned Passwords checks made at the terminal (label and count only; passwords are never typed in chat)."),
+    (tools.report_exposure, "Markdown exposure report for a subject: breaches, listings, requests, password checks; also written to the reports directory."),
 ]
 
 

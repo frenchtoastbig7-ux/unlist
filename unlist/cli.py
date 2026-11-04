@@ -102,6 +102,27 @@ def catalog_import_registry(
     click.echo(f"{enriched} enriched from The Markup opt-out pages dataset")
 
 
+@main.command("password-check")
+@click.option(
+    "--label",
+    prompt="Label (e.g. 'old bank password'; the password itself is never stored)",
+)
+@click.password_option(confirmation_prompt=False, help="Typed at a hidden prompt if omitted.")
+def password_check(label: str, password: str) -> None:
+    """Check a password against Pwned Passwords by k-anonymity. Only the first five
+    characters of its SHA-1 leave this machine; only the label and count are kept."""
+    from unlist.db import open_db
+    from unlist.scanners.breaches.run import record_password_check
+
+    count = record_password_check(open_db(), label, password)
+    if count is None:
+        raise click.ClickException("Pwned Passwords did not answer; try again later.")
+    if count:
+        click.echo(f"{label}: seen {count:,} times in breaches. Change it everywhere it is used.")
+    else:
+        click.echo(f"{label}: not found in Pwned Passwords.")
+
+
 @main.command("data-dir")
 def data_dir_cmd() -> None:
     """Print the data directory."""

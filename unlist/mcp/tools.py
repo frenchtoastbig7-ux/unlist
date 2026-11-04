@@ -303,3 +303,87 @@ def audit_tail(limit: int = 30) -> str:
     ok, detail = log.verify()
     rows = [[e["ts"][:19], e["event"], e.get("actor", ""), json.dumps(e.get("data", {}))[:100]] for e in log.entries(limit)]
     return f"{'Chain intact' if ok else 'CHAIN BROKEN'}: {detail}\n\n" + (table(["time", "event", "actor", "data"], rows) if rows else "No entries yet.")
+
+
+# breaches ---------------------------------------------------------------------------
+
+
+def scan_breaches(subject_id: str, sources: str = "") -> str:
+    """Look up every current email address of the subject in breach databases (HIBP with
+    a key, LeakCheck public, XposedOrNot; all return breach names, never leaked values).
+    sources: comma-separated subset of hibp, leakcheck, xposedornot. Takes a few seconds
+    per address because of rate limits. Needs consent on record."""
+    from unlist.scanners.breaches import scan_breaches as run_scan
+    from unlist.scanners.breaches.run import SOURCES
+
+    chosen = tuple(s.strip() for s in sources.split(",") if s.strip()) or SOURCES
+    bad = set(chosen) - set(SOURCES)
+    if bad:
+        return f"Unknown sources {sorted(bad)}; choose from {', '.join(SOURCES)}."
+    conn = _conn()
+    try:
+        res = run_scan(conn, subject_id, sources=chosen)
+    except ConsentError as exc:
+        return f"Refused: {exc}"
+    lines = [
+        f"Breach scan run {res.run_id} for `{subject_id}`: {len(res.emails)} address(es), "
+        f"**{res.new_hits} new** hit(s), {res.seen_hits} already known.",
+    ]
+    for src, why in res.skipped.items():
+        lines.append(f"- skipped {src}: {why}")
+    for err in res.errors:
+        lines.append(f"- problem: {err}")
+    if res.new_hits:
+        lines.append("")
+        lines.append(breaches_list(subject_id))
+    return "\n".join(lines)
+
+
+def breaches_list(subject_id: str, since: str = "") -> str:
+    """Breach hits recorded for a subject, newest breach first. since: ISO date to show
+    only hits first seen on or after it."""
+    from unlist.scanners.breaches.run import hits_for
+
+    rows = hits_for(_conn(), subject_id, since or None)
+    if not rows:
+        return "No breach hits recorded for this subject."
+    return table(
+        ["breach", "date", "address", "data exposed", "source", "first seen"],
+        [
+            [
+                r["title"] or r["breach_name"],
+                r["breach_date"] or "",
+                r["identifier_value"],
+                ", ".join(json.loads(r["data_classes_json"] or "[]"))[:100],
+                r["source"],
+                r["first_seen"][:10],
+            ]
+            for r in rows
+        ],
+    )
+
+
+def password_checks_list() -> str:
+    """Results of Pwned Passwords checks run from the terminal with `unlist password-check`.
+    Passwords are typed at a hidden prompt there, never in chat; only a label and the
+    number of times the password appears in breaches are stored."""
+    rows = _conn().execute(
+        "SELECT * FROM password_checks ORDER BY checked_at DESC LIMIT 50"
+    ).fetchall()
+    if not rows:
+        return "No password checks yet. Run `uv run unlist password-check` in a terminal."
+    return table(["label", "seen in breaches", "checked"], [[r["label"], r["pwned_count"], r["checked_at"]] for r in rows])
+
+
+def report_exposure(subject_id: str) -> str:
+    """Markdown exposure report for a subject: breaches by name with data classes,
+    people-search listings by status, removal requests, password checks. Also written to
+    the reports directory."""
+    from unlist.reports.exposure import write_exposure_report
+
+    conn = _conn()
+    try:
+        path, body = write_exposure_report(conn, subject_id)
+    except KeyError as exc:
+        return str(exc)
+    return f"# Exposure report: `{subject_id}`\n\n{body}\n\nWritten to {path}"
