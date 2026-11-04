@@ -9,7 +9,6 @@ from pathlib import Path
 from unlist.core.report import table, write_report
 from unlist.subjects import SubjectRepo
 
-
 _SENSITIVE_TOKENS = (
     "password",
     "security question",
@@ -90,7 +89,9 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
         sensitive = {c for d in by_name.values() for c in d["classes"] if _is_sensitive(c)}
         if sensitive:
             parts.append(
-                "\n**Act on these:** " + ", ".join(sorted(sensitive)) + " appear in at least one breach. "
+                "\n**Act on these:** "
+                + ", ".join(sorted(sensitive))
+                + " appear in at least one breach. "
                 "Change the password anywhere it was reused; consider a credit freeze if identity "
                 "data is listed."
             )
@@ -111,7 +112,14 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
             table(
                 ["broker", "status", "listing", "score", "first seen", "last seen"],
                 [
-                    [f["broker_id"], f["status"], f["listing_url"], f["score"], f["first_seen"][:10], f["last_seen"][:10]]
+                    [
+                        f["broker_id"],
+                        f["status"],
+                        f["listing_url"],
+                        f["score"],
+                        f["first_seen"][:10],
+                        f["last_seen"][:10],
+                    ]
                     for f in findings
                 ],
             )
@@ -126,7 +134,17 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
         parts.append(
             table(
                 ["id", "broker", "channel", "basis", "state", "deadline"],
-                [[r["id"], r["broker_id"], r["channel"], r["basis"], r["state"], (r["deadline"] or "")[:10]] for r in requests],
+                [
+                    [
+                        r["id"],
+                        r["broker_id"],
+                        r["channel"],
+                        r["basis"],
+                        r["state"],
+                        (r["deadline"] or "")[:10],
+                    ]
+                    for r in requests
+                ],
             )
         )
     else:
@@ -135,7 +153,12 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
     pw = _rows(conn, "SELECT * FROM password_checks ORDER BY checked_at DESC LIMIT 20")
     if pw:
         parts.append("\n## Password checks (counts only)\n")
-        parts.append(table(["label", "seen in breaches", "checked"], [[p["label"], p["pwned_count"], p["checked_at"][:10]] for p in pw]))
+        parts.append(
+            table(
+                ["label", "seen in breaches", "checked"],
+                [[p["label"], p["pwned_count"], p["checked_at"][:10]] for p in pw],
+            )
+        )
 
     body = "\n".join(parts)
     title = f"Exposure report: {subject.label}"
@@ -144,5 +167,12 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
 
 def write_exposure_report(conn: sqlite3.Connection, subject_id: str) -> tuple[Path, str]:
     body, meta = exposure_markdown(conn, subject_id)
-    path = write_report("exposure", subject_id, meta["title"], body, params={"subject": subject_id}, counts=meta["counts"])
+    path = write_report(
+        "exposure",
+        subject_id,
+        meta["title"],
+        body,
+        params={"subject": subject_id},
+        counts=meta["counts"],
+    )
     return path, body
