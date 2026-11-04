@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}unlist{% endblock %}</title>
+<link rel="stylesheet" href="/static/style.css">
+{% block head %}{% endblock %}
+</head>
+<body>
+<header>
+  <span class="brand">unlist</span>
+  <a href="/">Overview</a>
+  <a href="/findings">Findings</a>
+  <a href="/requests">Requests</a>
+  <a href="/inbox">Inbox</a>
+  <a href="/monitor">Monitor</a>
+  <a href="/catalog">Catalog</a>
+  <a href="/jobs">Jobs</a>
+  <a href="/audit">Audit</a>
+  <span class="muted" style="margin-left:auto">local only · v{{ version }}</span>
+</header>
+<main>
+{% if msg %}<div class="msg">{{ msg }}</div>{% endif %}
+{% block body %}{% endblock %}
+</main>
+</body>
+</html>

@@ -20,6 +20,7 @@ dependencies = [
 
 [project.optional-dependencies]
 browser = ["playwright>=1.47"]
+app = ["fastapi>=0.110", "uvicorn>=0.29", "python-multipart>=0.0.9"]
 extract = ["trafilatura>=1.12", "readability-lxml>=0.8"]
 dev = ["pytest>=8", "ruff>=0.6"]
 
@@ -29,6 +30,7 @@ Repository = "https://github.com/frenchtoastbig7-ux/unlist"
 [project.scripts]
 unlist = "unlist.cli:main"
 unlist-mcp = "unlist.mcp.server:main"
+unlist-app = "unlist.app.main:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -47,7 +49,7 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "UP", "B", "C4", "SIM", "RUF"]
 ignore = ["RUF012"]
-per-file-ignores = { "tests/**" = ["E501"], "unlist/mcp/**" = ["E501"], "unlist/requests/inbox.py" = ["E501"], "unlist/requests/drop.py" = ["E501"] }
+per-file-ignores = { "tests/**" = ["E501"], "unlist/mcp/**" = ["E501"], "unlist/requests/inbox.py" = ["E501"], "unlist/requests/drop.py" = ["E501"], "unlist/app/**" = ["E501", "B008"] }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

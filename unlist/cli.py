@@ -213,6 +213,17 @@ def uninstall_launchd() -> None:
         click.echo("nothing installed")
 
 
+@main.command("app")
+@click.option("--port", default=8787, show_default=True)
+@click.option("--no-browser", is_flag=True, help="Do not open the dashboard in a browser.")
+def app_cmd(port: int, no_browser: bool) -> None:
+    """Run the local web dashboard (127.0.0.1 only)."""
+    from unlist.app.main import main as run_app
+
+    args = ["--port", str(port)] + (["--no-browser"] if no_browser else [])
+    run_app(args)
+
+
 @main.command("data-dir")
 def data_dir_cmd() -> None:
     """Print the data directory."""

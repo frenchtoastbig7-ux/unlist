@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}{{ s.label }} · unlist{% endblock %}
+{% block body %}
+<h1>{{ s.label }} <span class="muted">({{ s.id }}, {{ s.kind }}, {{ s.residency_state or '' }} {{ s.residency_country }}, regime {{ s.legal_regime }})</span></h1>
+<p>Consent: {% if consent_state == 'none' %}<span class="tag reappeared">none recorded</span>{% elif consent_state.startswith('EXPIRED') %}<span class="tag reappeared">{{ consent_state }}</span>{% else %}<span class="tag removed">{{ consent_state }}</span>{% endif %}
+ · <a href="/subjects/{{ s.id }}/report">exposure report</a>{% if s.is_california %} · <a href="/subjects/{{ s.id }}/drop">California DROP</a>{% endif %}</p>
+
+<form method="post" action="/subjects/{{ s.id }}/consent" class="row">
+  <label>holder<input name="holder" value="{{ s.consent.holder if s.consent else s.label }}" required></label>
+  <label>instrument<input name="instrument" value="{{ s.consent.instrument if s.consent else 'self-declaration: my own data' }}" required></label>
+  <label>expires<input name="expires" type="date" required></label>
+  <label>scope note<input name="scope_note"></label>
+  <button class="quiet">Record consent</button>
+</form>
+
+<h2>Identifiers</h2>
+<table>
+<tr><th>kind</th><th>value</th><th>current</th><th>place / meta</th><th>note</th><th></th></tr>
+{% for i in s.identifiers %}
+<tr><td>{{ i.kind }}</td><td>{{ i.value }}</td><td>{{ 'yes' if i.current else 'past' }}</td><td class="muted">{{ json.dumps(i.meta) if i.meta else '' }}</td><td>{{ i.note }}</td>
+<td><form class="inline" method="post" action="/identifiers/{{ i.id }}/delete"><input type="hidden" name="sid" value="{{ s.id }}"><button class="small quiet">remove</button></form></td></tr>
+{% else %}<tr><td colspan="6" class="muted">None yet. Brokers index by name and place, so add names and addresses with city and state.</td></tr>{% endfor %}
+</table>
+<form method="post" action="/subjects/{{ s.id }}/identifiers" class="row">
+  <label>kind<select name="kind">{% for k in ['name','alias','email','phone','address','dob','username','relative'] %}<option>{{ k }}</option>{% endfor %}</select></label>
+  <label>value<input name="value" required placeholder="Jane Q Doe / jane@example.com / 1982-06-15"></label>
+  <label>current<select name="current"><option value="1">yes</option><option value="0">past</option></select></label>
+  <label>city<input name="city"></label>
+  <label>state<input name="state" maxlength="2"></label>
+  <label>zip<input name="zip"></label>
+  <label>from year<input name="from_year" size="4"></label>
+  <label>to year<input name="to_year" size="4"></label>
+  <label>relation<input name="relation"></label>
+  <label>note<input name="note"></label>
+  <button class="quiet">Add</button>
+</form>
+
+<h2>Scans</h2>
+<form method="post" action="/subjects/{{ s.id }}/scan/breaches" class="inline"><button>Scan breaches</button></form>
+<form method="post" action="/subjects/{{ s.id }}/scan/brokers" class="inline" style="margin-left:8px">
+  <select name="use_browser"><option value="1">with browser</option><option value="0">HTTP only</option></select>
+  <input name="brokers" placeholder="broker ids (blank = all searchable)" style="min-width:260px">
+  <button>Scan people-search sites</button>
+</form>
+
+<h2>Breach hits ({{ hits|length }})</h2>
+<table><tr><th>breach</th><th>date</th><th>address</th><th>data exposed</th><th>source</th><th>first seen</th></tr>
+{% for h in hits %}<tr><td>{{ h.title or h.breach_name }}</td><td>{{ h.breach_date or '' }}</td><td>{{ h.identifier_value }}</td><td class="muted">{{ json.loads(h.data_classes_json or '[]')|join(', ')|truncate(90) }}</td><td>{{ h.source }}</td><td>{{ h.first_seen[:10] }}</td></tr>{% else %}<tr><td colspan="6" class="muted">none recorded</td></tr>{% endfor %}
+</table>
+
+<h2>Listings ({{ findings|length }})</h2>
+<table><tr><th>id</th><th>broker</th><th>status</th><th>score</th><th>listing</th><th>last seen</th></tr>
+{% for f in findings %}<tr><td><a href="/findings/{{ f.id }}">{{ f.id }}</a></td><td>{{ f.broker_id }}</td><td><span class="tag {{ f.status }}">{{ f.status }}</span></td><td>{{ f.score }}</td><td class="muted">{{ f.listing_url|truncate(70) }}</td><td>{{ f.last_seen[:10] }}</td></tr>{% else %}<tr><td colspan="6" class="muted">none yet</td></tr>{% endfor %}
+</table>
+
+<h2>Requests ({{ requests|length }})</h2>
+<table><tr><th>id</th><th>broker</th><th>channel</th><th>basis</th><th>state</th><th>deadline</th></tr>
+{% for r in requests %}<tr><td><a href="/requests/{{ r.id }}">{{ r.id }}</a></td><td>{{ r.broker_id }}</td><td>{{ r.channel }}</td><td>{{ r.basis }}</td><td><span class="tag {{ r.state }}">{{ r.state }}</span></td><td>{{ (r.deadline or '')[:10] }}</td></tr>{% else %}<tr><td colspan="6" class="muted">none yet</td></tr>{% endfor %}
+</table>
+{% endblock %}

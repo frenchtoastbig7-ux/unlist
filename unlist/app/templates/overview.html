@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Overview</h1>
+<div class="cards">
+  <div class="card"><div class="n">{{ counts.breach_hits }}</div><div class="l">breach hits</div></div>
+  <div class="card"><div class="n">{{ counts.candidates }}</div><div class="l">candidate listings to review</div></div>
+  <div class="card"><div class="n">{{ counts.confirmed }}</div><div class="l">confirmed or requested</div></div>
+  <div class="card"><div class="n">{{ counts.removed }}</div><div class="l">verified removed</div></div>
+  <div class="card"><div class="n">{{ counts.reappeared }}</div><div class="l">reappeared</div></div>
+  <div class="card"><div class="n">{{ counts.drafted }}</div><div class="l">drafts awaiting approval</div></div>
+  <div class="card"><div class="n">{{ counts.open }}</div><div class="l">open requests</div></div>
+  <div class="card"><div class="n">{{ counts.overdue }}</div><div class="l">overdue</div></div>
+</div>
+
+<h2>Subjects</h2>
+<table>
+<tr><th>id</th><th>label</th><th>kind</th><th>residency</th><th>identifiers</th><th>consent</th><th></th></tr>
+{% for s, consent in subjects %}
+<tr><td><a href="/subjects/{{ s.id }}">{{ s.id }}</a></td><td>{{ s.label }}</td><td>{{ s.kind }}</td><td>{{ s.residency_state or s.residency_country }}</td><td>{{ s.identifiers|length }}</td>
+<td>{% if consent == 'none' %}<span class="tag reappeared">none</span>{% elif consent.startswith('EXPIRED') %}<span class="tag reappeared">{{ consent }}</span>{% else %}<span class="tag removed">{{ consent }}</span>{% endif %}</td>
+<td><a href="/subjects/{{ s.id }}/report">report</a></td></tr>
+{% else %}
+<tr><td colspan="7" class="muted">No subjects yet.</td></tr>
+{% endfor %}
+</table>
+<p><a href="/subjects/new"><button>Add a subject</button></a></p>
+
+<div class="grid2">
+<div>
+<h2>Recent jobs</h2>
+<table><tr><th>id</th><th>job</th><th>status</th><th>result</th></tr>
+{% for j in jobs %}<tr><td><a href="/jobs/{{ j.id }}">{{ j.id }}</a></td><td>{{ j.name }}</td><td><span class="tag {{ j.status }}">{{ j.status }}</span></td><td>{{ (j.result or '')[:80] }}</td></tr>{% else %}<tr><td colspan="4" class="muted">none</td></tr>{% endfor %}
+</table>
+</div>
+<div>
+<h2>Recent audit entries</h2>
+<table><tr><th>when</th><th>event</th><th>detail</th></tr>
+{% for e in audit %}<tr><td>{{ e.ts[:16] }}</td><td>{{ e.event }}</td><td class="muted">{{ e.data|tojson|truncate(90) }}</td></tr>{% else %}<tr><td colspan="3" class="muted">nothing yet</td></tr>{% endfor %}
+</table>
+</div>
+</div>
+<p class="muted">Data directory {{ data_dir }} · catalog {{ catalog_size }} brokers</p>
+{% endblock %}

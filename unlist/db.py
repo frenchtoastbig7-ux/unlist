@@ -15,6 +15,7 @@ MIGRATION_DIRS = [
     PACKAGE_DIR / "scanners" / "migrations",
     PACKAGE_DIR / "requests" / "migrations",
     PACKAGE_DIR / "monitor" / "migrations",
+    PACKAGE_DIR / "app" / "migrations",
 ]
 
 

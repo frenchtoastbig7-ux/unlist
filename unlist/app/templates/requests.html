@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Requests</h1>
+<form method="get" action="/requests" class="row">
+  <label>subject<select name="subject"><option value="">all</option>{% for s in subjects %}<option value="{{ s.id }}" {% if s.id == subject %}selected{% endif %}>{{ s.id }}</option>{% endfor %}</select></label>
+  <label>state<select name="state"><option value="">all</option>{% for st in states %}<option {% if st == state %}selected{% endif %}>{{ st }}</option>{% endfor %}</select></label>
+  <button class="quiet">Filter</button>
+</form>
+<table>
+<tr><th>id</th><th>subject</th><th>broker</th><th>channel</th><th>basis</th><th>state</th><th>sent</th><th>deadline</th><th>tag</th></tr>
+{% for r in rows %}<tr><td><a href="/requests/{{ r.id }}">{{ r.id }}</a></td><td>{{ r.subject_id }}</td><td>{{ r.broker_id }}</td><td>{{ r.channel }}</td><td>{{ r.basis }}</td><td><span class="tag {{ r.state }}">{{ r.state }}</span></td><td>{{ (r.sent_at or '')[:10] }}</td><td>{{ (r.deadline or '')[:10] }}</td><td class="muted">{{ r.tag }}</td></tr>
+{% else %}<tr><td colspan="9" class="muted">No requests match.</td></tr>{% endfor %}
+</table>
+<div class="grid2">
+<div>
+<h2>Draft</h2>
+<form method="post" action="/requests/draft" class="row">
+  <label>subject<select name="subject">{% for s in subjects %}<option value="{{ s.id }}">{{ s.id }}</option>{% endfor %}</select></label>
+  <label>broker (blank = every broker with confirmed listings)<input name="broker"></label>
+  <label>channel<select name="channel"><option value="">from catalog</option><option>email</option><option>form</option><option>mail</option></select></label>
+  <label>basis<select name="basis"><option value="">from residency</option><option>ccpa_delete</option><option>ccpa_optout</option><option>gdpr_art17</option><option>plain</option></select></label>
+  <button class="quiet">Draft</button>
+</form>
+<form method="post" action="/requests/draft-blind" class="row">
+  <label>subject<select name="subject">{% for s in subjects %}<option value="{{ s.id }}">{{ s.id }}</option>{% endfor %}</select></label>
+  <label>category<select name="category"><option value="">any</option><option>people-search</option><option>marketing</option><option>background-check</option><option>credit</option><option>other</option></select></label>
+  <label>only CA registrants<select name="only_registry"><option value="1">yes</option><option value="0">no</option></select></label>
+  <label>limit<input name="limit" type="number" value="25" min="1" max="200"></label>
+  <button class="quiet">Draft blind requests</button>
+</form>
+</div>
+<div>
+<h2>Approve and send</h2>
+<form method="post" action="/requests/approve-all" class="row"><button>Approve every draft</button></form>
+<form method="post" action="/requests/send" class="row"><label>ids (blank = every approved email request)<input name="ids"></label><button>Send approved email requests</button></form>
+<p class="muted">Sending needs the opt-out mailbox in .env. Form requests are opened from their own page; mail requests are rendered as letters there.</p>
+</div>
+</div>
+{% endblock %}

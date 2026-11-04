@@ -27,7 +27,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Install
-        run: uv sync --extra extract --extra dev
+        run: uv sync --extra extract --extra dev --extra app
 
       - name: Ruff lint
         run: uv run ruff check .

@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Audit log</h1>
+<p>{% if ok %}<span class="tag removed">chain intact</span>{% else %}<span class="tag reappeared">CHAIN BROKEN</span>{% endif %} {{ detail }}</p>
+<table><tr><th>when</th><th>event</th><th>actor</th><th>data</th></tr>
+{% for e in entries %}<tr><td>{{ e.ts[:19] }}</td><td>{{ e.event }}</td><td>{{ e.actor }}</td><td class="muted">{{ json.dumps(e.data)|truncate(140) }}</td></tr>{% endfor %}
+</table>
+{% endblock %}

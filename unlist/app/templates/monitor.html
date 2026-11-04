@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Monitor</h1>
+<form method="post" action="/monitor/run" class="row">
+  <label>force<select name="force"><option value="0">only what is due</option><option value="1">everything</option></select></label>
+  <label>only (comma-separated)<input name="only" placeholder="{{ names|join(', ') }}" style="min-width:320px"></label>
+  <label>browser<select name="use_browser"><option value="1">yes</option><option value="0">HTTP only</option></select></label>
+  <button>Run</button>
+</form>
+<table><tr><th>job</th><th>every</th><th>last run</th><th>next</th><th>last result</th><th>what</th></tr>
+{% for j in jobs %}<tr><td>{{ j[0] }}</td><td>{{ j[1] }}</td><td>{{ j[2] }}</td><td>{{ j[3] }}</td><td>{{ j[4] }}</td><td class="muted">{{ j[5] }}</td></tr>{% endfor %}
+</table>
+<form method="post" action="/monitor/interval" class="row">
+  <label>job<select name="job">{% for n in names %}<option>{{ n }}</option>{% endfor %}</select></label>
+  <label>interval<input name="interval" placeholder="7d, 12h"></label>
+  <button class="quiet">Set interval</button>
+</form>
+<p class="muted">To run this daily without the dashboard: <code>uv run unlist monitor install-launchd</code>.</p>
+<h2>Reports</h2>
+<ul>{% for p in reports %}<li><a href="/reports/{{ p }}">{{ p }}</a></li>{% else %}<li class="muted">none yet</li>{% endfor %}</ul>
+{% endblock %}

@@ -46,6 +46,19 @@ uv sync --extra extract --extra browser
 uv run playwright install chromium
 ```
 
+## The dashboard
+
+```bash
+uv sync --extra extract --extra app
+uv run unlist app
+```
+
+opens http://127.0.0.1:8787/ (localhost only, never a network port): subjects and
+identifiers, scans as background jobs with a live log, candidate listings with their
+screenshots to confirm or reject, request drafts to read and approve, sending, the inbox,
+the monitor schedule, reports, the catalog and the audit log. Form posts are accepted only
+from the dashboard's own origin, so a web page you happen to visit cannot drive it.
+
 ## Connect it to the Claude desktop app
 
 Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (adjust the two
@@ -153,6 +166,7 @@ unlist/
   monitor/     scheduled jobs, escalation notes, launchd plist
   reports/     exposure report
   mcp/         the MCP server and its tools
+  app/         the local web dashboard (FastAPI, Jinja, one background job worker)
   cli.py       serve-mcp, status, catalog maintenance
 tests/         offline; browser tests are marked and skipped in CI
 ```

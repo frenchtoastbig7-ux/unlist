@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Request {{ r.id }} · {{ r.broker_id }} <span class="tag {{ r.state }}">{{ r.state }}</span></h1>
+<p>{{ r.channel }} · {{ r.basis }} · tag {{ r.tag }} · subject <a href="/subjects/{{ r.subject_id }}">{{ r.subject_id }}</a> · <a href="/catalog/{{ r.broker_id }}">catalog</a></p>
+<p class="muted">created {{ r.created_at }}{% if r.approved_at %} · approved {{ r.approved_at }}{% endif %}{% if r.sent_at %} · sent {{ r.sent_at }}{% endif %}{% if r.deadline %} · deadline {{ r.deadline[:10] }}{% endif %}{% if r.note %} · {{ r.note }}{% endif %}</p>
+<p>To: {{ r.to_address or r.form_url or r.drop_id or '-' }}{% if listings %} · listings: {% for u in listings %}<a href="{{ u }}" target="_blank" rel="noreferrer">{{ u|truncate(60) }}</a> {% endfor %}{% endif %}</p>
+<p>
+{% if r.state == 'drafted' %}<form class="inline" method="post" action="/requests/{{ r.id }}/approve"><button>Approve</button></form>{% endif %}
+{% if r.channel == 'email' and r.state == 'approved' %}<form class="inline" method="post" action="/requests/send"><input type="hidden" name="ids" value="{{ r.id }}"><button>Send now</button></form>{% endif %}
+{% if r.channel == 'form' and r.state in ('approved', 'awaiting_verification') %}<form class="inline" method="post" action="/requests/{{ r.id }}/form-open"><button>Open the form in a browser</button></form>{% endif %}
+{% if r.channel == 'mail' %}<form class="inline" method="post" action="/requests/{{ r.id }}/letter"><button class="quiet">Write PDF letter</button></form>{% endif %}
+</p>
+<form method="post" action="/requests/{{ r.id }}/state" class="row">
+  <label>set state<select name="state">{% for st in states %}<option {% if st == r.state %}selected{% endif %}>{{ st }}</option>{% endfor %}</select></label>
+  <label>note<input name="note"></label>
+  <button class="quiet">Set</button>
+</form>
+{% if r.body %}<h2>Letter</h2><p class="muted">Subject: {{ r.subject_line }}</p><pre>{{ r.body }}</pre>{% endif %}
+<h2>Events</h2>
+<table><tr><th>at</th><th>kind</th><th>detail</th></tr>{% for e in events %}<tr><td>{{ e.at[:16] }}</td><td>{{ e.kind }}</td><td>{{ e.detail or '' }}</td></tr>{% endfor %}</table>
+{% if replies %}<h2>Replies</h2><table><tr><th>received</th><th>from</th><th>subject</th><th>class</th><th>action</th></tr>{% for m in replies %}<tr><td>{{ (m.received_at or '')[:16] }}</td><td>{{ m.from_addr }}</td><td>{{ m.subject }}</td><td>{{ m.classification }}</td><td>{{ m.action }}</td></tr>{% endfor %}</table>{% endif %}
+{% endblock %}

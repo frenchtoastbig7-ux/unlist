@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Catalog</h1>
+<form method="get" action="/catalog" class="row">
+  <label>search<input name="q" value="{{ q }}" placeholder="name, host or id"></label>
+  <label>category<select name="category"><option value="">any</option>{% for c in categories %}<option {% if c == category %}selected{% endif %}>{{ c }}</option>{% endfor %}</select></label>
+  <button class="quiet">Filter</button>
+</form>
+<p class="muted">{{ total }} broker(s){% if total > 300 %}, showing 300{% endif %}</p>
+<table><tr><th>id</th><th>name</th><th>category</th><th>status</th><th>search</th><th>opt-out</th><th>requires</th><th>verified</th></tr>
+{% for b in brokers %}<tr><td><a href="/catalog/{{ b.id }}">{{ b.id }}</a></td><td>{{ b.name|truncate(40) }}</td><td>{{ b.category }}</td><td>{{ b.status }}</td><td>{{ 'yes' if b.searchable else '' }}</td><td>{{ b.opt_out.method }}</td><td class="muted">{{ b.opt_out.requires|join(', ') }}</td><td>{{ b.last_verified or '' }}</td></tr>{% endfor %}
+</table>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Finding {{ r.id }} <span class="tag {{ r.status }}">{{ r.status }}</span></h1>
+<p><b>{{ r.broker_id }}</b> · <a href="/catalog/{{ r.broker_id }}">catalog entry</a> · subject <a href="/subjects/{{ r.subject_id }}">{{ r.subject_id }}</a> · score {{ r.score }} ({{ ex.reasons|join(', ') }})</p>
+<p>Listing: <a href="{{ r.listing_url }}" target="_blank" rel="noreferrer">{{ r.listing_url }}</a></p>
+<p>Name shown: {{ ex.name_text }} · age {{ ex.age or '-' }} · places {{ ex.places|join('; ') or '-' }} · phones {{ ex.phones|join(', ') or '-' }}</p>
+<p class="muted">First seen {{ r.first_seen }}, last seen {{ r.last_seen }}{% if r.verified_at %}, verified {{ r.verified_at }}{% endif %}{% if r.note %} · note: {{ r.note }}{% endif %}</p>
+{% if ex.snippet %}<pre>{{ ex.snippet }}</pre>{% endif %}
+<form method="post" action="/findings/{{ r.id }}/status" class="row">
+  <label>status<select name="status">{% for st in statuses %}<option {% if st == r.status %}selected{% endif %}>{{ st }}</option>{% endfor %}</select></label>
+  <label>note<input name="note"></label>
+  <button>Set</button>
+</form>
+{% if requests %}<h2>Requests for this broker</h2><table><tr><th>id</th><th>channel</th><th>state</th><th>deadline</th></tr>{% for q in requests %}<tr><td><a href="/requests/{{ q.id }}">{{ q.id }}</a></td><td>{{ q.channel }}</td><td><span class="tag {{ q.state }}">{{ q.state }}</span></td><td>{{ (q.deadline or '')[:10] }}</td></tr>{% endfor %}</table>{% endif %}
+{% if cap %}
+<h2>Evidence</h2>
+<p class="muted">Capture {{ cap.id }} ({{ cap.kind }}, HTTP {{ cap.status }}, {{ cap.captured_at }}) · <a href="/evidence/{{ cap.id }}/raw" target="_blank">raw HTML</a> · sha256 {{ cap.sha256[:16] }}…</p>
+{% if cap.shot_path %}<img class="shot" src="/evidence/{{ cap.id }}/shot" alt="screenshot of the page as captured">{% endif %}
+{% endif %}
+{% endblock %}
