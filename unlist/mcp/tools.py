@@ -993,3 +993,76 @@ def drop_record(subject_id: str, drop_id: str) -> str:
     except (ConsentError, ValueError) as exc:
         return f"Not recorded: {exc}"
     return f"DROP ID {r['drop_id']} recorded as request {r['id']}; brokers must act by {r['deadline'][:10]}."
+
+
+# monitor ----------------------------------------------------------------------------
+
+
+def monitor_run_due(force: bool = False, only: str = "", use_browser: bool = True) -> str:
+    """Run every scheduled job that is due: breach rescans (weekly), listing verification
+    (every 14 days), full people-search sweep (monthly), deadline checks, DROP cycle,
+    follow-up drafts for reappeared listings, inbox poll (daily). force runs them all;
+    only: comma-separated job names. Writes a monitor report and a macOS notification
+    when something changed. Can take minutes."""
+    from unlist.monitor import JOBS, run_due
+
+    chosen = {x.strip() for x in only.split(",") if x.strip()} or None
+    if chosen and (bad := chosen - set(JOBS)):
+        return f"Unknown jobs {sorted(bad)}; choose from {', '.join(JOBS)}."
+    s = run_due(_conn(), force=force, use_browser=use_browser, only=chosen)
+    lines = [
+        f"Ran: {', '.join(s.ran) or 'nothing was due'}; skipped: {', '.join(s.skipped) or 'none'}",
+        "",
+    ]
+    lines += [f"- {c}" for c in s.changes] or ["- nothing changed"]
+    if s.problems:
+        lines += ["", "Problems:"] + [f"- {p}" for p in s.problems]
+    lines += ["", f"Report: {s.report_path}"]
+    return "\n".join(lines)
+
+
+def monitor_status() -> str:
+    """Each scheduled job: interval, last run, next due, last result."""
+    from unlist.monitor.run import jobs_status
+
+    return table(["job", "every", "last run", "next", "last result", "what"], jobs_status(_conn()))
+
+
+def monitor_set_interval(job: str, interval: str) -> str:
+    """Change a job's interval, e.g. verify_listings 7d, breaches 3d, brokers_full 2w."""
+    from unlist.monitor.run import set_interval
+
+    try:
+        set_interval(_conn(), job, interval)
+    except ValueError as exc:
+        return str(exc)
+    return f"{job} now runs every {interval}."
+
+
+def reports_list(kind: str = "") -> str:
+    """Markdown reports written so far (exposure, monitor), newest first."""
+    base = paths.reports_dir()
+    files = sorted(base.glob(f"{kind or '*'}/*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not files:
+        return "No reports yet."
+    return table(
+        ["report", "written"],
+        [
+            [
+                str(p.relative_to(base)),
+                p.stat().st_mtime
+                and __import__("datetime")
+                .datetime.fromtimestamp(p.stat().st_mtime)
+                .strftime("%Y-%m-%d %H:%M"),
+            ]
+            for p in files[:40]
+        ],
+    )
+
+
+def report_read(name: str) -> str:
+    """Read one report by its path from reports_list (e.g. monitor/2026-11-04_run.md)."""
+    p = (paths.reports_dir() / name).resolve()
+    if not str(p).startswith(str(paths.reports_dir().resolve())) or not p.is_file():
+        return f"No report {name!r}."
+    return p.read_text(encoding="utf-8")

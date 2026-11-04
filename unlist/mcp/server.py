@@ -62,6 +62,11 @@ TOOLS: list[tuple[Callable, str]] = [
     (tools.letter_write, "Render a mail-channel request as a PDF letter."),
     (tools.drop_prepare, "California DROP: the exact profile to enter at the state platform."),
     (tools.drop_record, "Record the DROP ID after submitting, to track the 45-day cycle."),
+    (tools.monitor_run_due, "Run every scheduled job that is due (breach rescans, listing verification, full sweep, deadlines, DROP cycle, follow-ups, inbox); force runs all. Writes a monitor report."),
+    (tools.monitor_status, "Scheduled jobs: interval, last run, next due, last result."),
+    (tools.monitor_set_interval, "Change a job's interval (e.g. verify_listings 7d)."),
+    (tools.reports_list, "Reports written so far, newest first."),
+    (tools.report_read, "Read one report by path."),
 ]
 
 

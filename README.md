@@ -16,18 +16,19 @@ this repository.
 - **Catalog.** Who holds people's data and how to get out: curated people-search entries
   with search templates and opt-out playbooks, plus every broker in the California
   registry with its contact email and privacy-rights page. See [CATALOG-SOURCES.md](CATALOG-SOURCES.md).
-- **Scanning** (milestones 2 and 3). Breach databases for your email addresses; people-search
+- **Scanning.** Breach databases for your email addresses; people-search
   sites for your names and locations, through a rate-limited fetcher that honours robots.txt
   and records refusals, falling back to a visible browser you can watch. Every page is kept as
   evidence with a SHA-256 and a screenshot. Matches are candidates until you confirm them,
   because independent tests found roughly four in ten "found" records belong to someone else.
-- **Removal** (milestone 4). Requests drafted under the law that applies to you (CCPA, GDPR,
+- **Removal.** Requests drafted under the law that applies to you (CCPA, GDPR,
   your state's privacy act, or a plain request), sent from a dedicated mailbox after you
   approve a batch; web forms prefilled in a visible browser where you click submit and solve
   anything interactive; verification links followed from the inbox; California DROP prepared
   for you to submit. The tool never solves a CAPTCHA, answers a phone code or uploads ID.
-- **Monitoring** (milestone 5). Re-scans on a schedule, flags listings that reappear and
-  requests past their legal deadline, drafts the follow-up, writes a Markdown report.
+- **Monitoring.** Re-scans on a schedule, verifies removals, flags listings that reappear
+  and requests past their legal deadline, drafts the follow-up, writes a Markdown report
+  and a macOS notification. A launchd job runs it daily.
 - **Audit.** Everything the tool did on your behalf goes to a hash-chained log.
 
 ## Install
@@ -61,8 +62,27 @@ paths), then quit and reopen Claude:
 }
 ```
 
-Then, in a chat: "create a subject for me, resident of California", "record my consent",
-"add my name Jane Doe, Oakland CA, and my email", "show the catalog entry for Spokeo".
+## A first session, in chat
+
+1. "Create a subject for me, resident of California" → `subject_add`
+2. "Record my consent for a year" → `consent_grant`
+3. "Add my name Jane Q Doe in Oakland CA, my previous address in Berkeley 94704, my email
+   and phone" → `identifier_add` (names and addresses carry city and state; brokers index
+   by place; a date of birth is only needed for DROP and never goes in a letter)
+4. "Scan breaches" → `scan_breaches`; "scan the people-search sites" → `scan_brokers`
+   (a Chromium window opens for sites that refuse plain fetches; if one shows a CAPTCHA,
+   solve it there and the scan continues)
+5. "Show me the candidates" → `findings_list`; confirm the ones that are you, reject the
+   rest (`findings_confirm`, `findings_reject`)
+6. "Draft the requests" → `requests_draft`; read them with `requests_show`; "approve all"
+7. "Send them" → `requests_send` (email, from the opt-out mailbox); "open the Spokeo
+   form" → `form_open` (prefilled; you click submit and close the window)
+8. Californians: "prepare DROP" → `drop_prepare`, submit at the state site, `drop_record`
+9. Later: "poll the inbox" → `inbox_poll`; "what's due?" → `monitor_run_due`;
+   "exposure report" → `report_exposure`
+
+For blind requests to brokers you have no listing on (the Incogni approach), use
+`requests_draft_blind` with a category and a cap, then approve and send in batches.
 
 Credentials (optional HIBP key, the opt-out mailbox) go in `.env` at the repo root; see
 `.env.example`. GUI apps do not read your shell profile, so the server reads that file.
@@ -93,6 +113,18 @@ Solve CAPTCHAs, answer verification calls, upload identity documents, submit for
 query paid breach dumps that return passwords, run for anyone whose consent is not on record,
 or send anything you have not approved.
 
+## Scheduling
+
+```bash
+uv run unlist monitor install-launchd --hour 9
+```
+
+writes `~/Library/LaunchAgents/inc.sovereignedge.unlist.plist` so `unlist run-due` runs
+every morning: breach rescans weekly, listing verification every 14 days, a full sweep
+monthly, deadline and DROP-cycle checks, follow-up drafts and the inbox poll daily.
+Intervals are changed with `monitor_set_interval`. Each run writes a report under
+`~/.unlist/reports/monitor/` and posts a macOS notification when something changed.
+
 ## Development
 
 ```bash
@@ -115,9 +147,11 @@ unlist/
   core/        fetch, store, extract, report, timeutil, audit, testing helpers
   subjects/    Subject, Identifier, Consent and their SQLite repo
   catalog/     Broker schema, loader, importers, brokers/*.yaml, registry/cppa.yaml
-  scanners/    breach and people-search scanners            (milestones 2, 3)
-  requests/    templates and channels: email, form, DROP     (milestone 4)
-  monitor/     scheduler, reappearance, launchd              (milestone 5)
+  scanners/    breaches/ (HIBP, LeakCheck, XposedOrNot) and brokers/ (urls, browser,
+               matcher, findings, run)
+  requests/    legal bases, letter templates, engine, mailer, inbox, form, drop, pdf
+  monitor/     scheduled jobs, escalation notes, launchd plist
+  reports/     exposure report
   mcp/         the MCP server and its tools
   cli.py       serve-mcp, status, catalog maintenance
 tests/         offline; browser tests are marked and skipped in CI

@@ -74,9 +74,7 @@ def catalog_validate() -> None:
     default=None,
     help="Default: the shipped registry/cppa.yaml",
 )
-def catalog_import_registry(
-    cppa_csv: Path, markup_csv: Path | None, out_path: Path | None
-) -> None:
+def catalog_import_registry(cppa_csv: Path, markup_csv: Path | None, out_path: Path | None) -> None:
     """Regenerate registry/cppa.yaml from the CPPA CSV (plus The Markup's opt-out pages)."""
     from unlist.catalog.importers import (
         build_registry,
@@ -144,6 +142,75 @@ def inbox_poll_cmd() -> None:
 
     _load_dotenv()
     click.echo(tools.inbox_poll())
+
+
+@main.command("run-due")
+@click.option("--force", is_flag=True, help="Run every job whether or not it is due.")
+@click.option("--no-browser", is_flag=True, help="HTTP only; never open Chromium.")
+@click.option("--only", default="", help="Comma-separated job names.")
+def run_due_cmd(force: bool, no_browser: bool, only: str) -> None:
+    """Run the scheduled jobs that are due (what launchd calls once a day)."""
+    from unlist.mcp import tools
+    from unlist.mcp.server import _load_dotenv
+
+    _load_dotenv()
+    click.echo(tools.monitor_run_due(force=force, only=only, use_browser=not no_browser))
+
+
+@main.group()
+def monitor() -> None:
+    """Scheduling."""
+
+
+@monitor.command("status")
+def monitor_status_cmd() -> None:
+    """Each job: interval, last run, next due."""
+    from unlist.mcp import tools
+
+    click.echo(tools.monitor_status())
+
+
+@monitor.command("install-launchd")
+@click.option("--hour", default=9, show_default=True)
+@click.option("--minute", default=0, show_default=True)
+def install_launchd(hour: int, minute: int) -> None:
+    """Write ~/Library/LaunchAgents/inc.sovereignedge.unlist.plist and load it (macOS)."""
+    import shutil
+    import subprocess
+
+    from unlist.monitor.run import LAUNCHD_LABEL, launchd_plist
+
+    repo = Path(__file__).resolve().parents[1]
+    uv = shutil.which("uv") or str(Path.home() / ".local" / "bin" / "uv")
+    plist = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    (paths.data_dir() / "logs").mkdir(parents=True, exist_ok=True)
+    plist.write_text(launchd_plist(str(repo), uv, hour, minute), encoding="utf-8")
+    subprocess.run(["launchctl", "unload", str(plist)], check=False, capture_output=True)
+    r = subprocess.run(
+        ["launchctl", "load", str(plist)], check=False, capture_output=True, text=True
+    )
+    click.echo(f"wrote {plist}; launchctl load: {'ok' if r.returncode == 0 else r.stderr.strip()}")
+    click.echo(
+        f"runs `unlist run-due` daily at {hour:02d}:{minute:02d}; "
+        f"logs under {paths.data_dir() / 'logs'}"
+    )
+
+
+@monitor.command("uninstall-launchd")
+def uninstall_launchd() -> None:
+    """Unload and remove the launchd job."""
+    import subprocess
+
+    from unlist.monitor.run import LAUNCHD_LABEL
+
+    plist = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
+    if plist.exists():
+        subprocess.run(["launchctl", "unload", str(plist)], check=False, capture_output=True)
+        plist.unlink()
+        click.echo(f"removed {plist}")
+    else:
+        click.echo("nothing installed")
 
 
 @main.command("data-dir")
