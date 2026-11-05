@@ -1,0 +1,10 @@
+{"license":["CC BY-SA 4.0"],"authors":[],"categories":["social","coding","xx NSFW xx"],
+ "sites":[
+  {"name":"FoundSite","uri_check":"https://found.test/u/{account}","uri_pretty":"https://found.test/@{account}","e_code":200,"e_string":"profile-header","m_code":404,"m_string":"Not Found","known":["x"],"cat":"social"},
+  {"name":"MissingSite","uri_check":"https://missing.test/{account}","e_code":200,"e_string":"joined","m_code":404,"m_string":"","known":["x"],"cat":"coding"},
+  {"name":"SoftMissing","uri_check":"https://soft.test/{account}","e_code":200,"e_string":"Profile","m_code":200,"m_string":"user does not exist","known":["x"],"cat":"social"},
+  {"name":"Guarded","uri_check":"https://guarded.test/{account}","e_code":200,"e_string":"x","m_code":404,"m_string":"","known":["x"],"cat":"social","protection":["cloudflare"]},
+  {"name":"Adult","uri_check":"https://adult.test/{account}","e_code":200,"e_string":"x","m_code":404,"m_string":"","known":["x"],"cat":"xx NSFW xx"},
+  {"name":"Retired","uri_check":"https://retired.test/{account}","e_code":200,"e_string":"x","m_code":404,"m_string":"","known":["x"],"cat":"social","valid":false},
+  {"name":"PostSite","uri_check":"https://post.test/api","post_body":"{\"user\":\"{account}\"}","headers":{"Content-Type":"application/json"},"e_code":200,"e_string":"\"exists\":true","m_code":200,"m_string":"\"exists\":false","known":["x"],"cat":"coding","strip_bad_char":"."}
+ ]}

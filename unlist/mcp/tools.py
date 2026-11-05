@@ -222,9 +222,10 @@ def identifier_add(
     note: str = "",
 ) -> str:
     """Add an identifier to a subject. kind: name, alias, email, phone, address, dob
-    (YYYY-MM-DD), username, relative. For name/alias/address give city and state (and zip,
+    (YYYY-MM-DD), username, relative, domain. For name/alias/address give city and state (and zip,
     from_year, to_year for addresses) because brokers index by location. current=false
-    marks a past name, address or number, which still matters for finding old listings."""
+    marks a past name, address or number, which still matters for finding old listings.
+    Also: username (handles you use online) and domain (domains you own)."""
     repo = SubjectRepo(_conn())
     meta: dict[str, str] = {}
     for k, v in (
@@ -1074,3 +1075,161 @@ def report_read(name: str) -> str:
     if not str(p).startswith(str(paths.reports_dir().resolve())) or not p.is_file():
         return f"No report {name!r}."
     return p.read_text(encoding="utf-8")
+
+
+# footprint --------------------------------------------------------------------------
+
+
+def scan_usernames(subject_id: str, limit: int = 0, categories: str = "", include_nsfw: bool = False) -> str:
+    """Check where the subject's usernames exist, one request per site, using the
+    WhatsMyName dataset (about 700 sites; downloaded and cached locally). Hits become
+    candidate account exposures to confirm or reject. limit caps the number of sites;
+    categories (comma-separated, e.g. social,coding,gaming) narrows it. Takes several
+    minutes per username at full size. Needs consent."""
+    from unlist.scanners.usernames import scan_usernames as run
+    from unlist.scanners.usernames.wmn import CREDIT
+
+    cats = {c.strip() for c in categories.split(",") if c.strip()} or None
+    try:
+        res = run(_conn(), subject_id, limit=limit or None, categories=cats, include_nsfw=include_nsfw)
+    except ConsentError as exc:
+        return f"Refused: {exc}"
+    except RuntimeError as exc:
+        return str(exc)
+    if not res.usernames:
+        return "This subject has no username identifier. Add one with identifier_add kind=username."
+    c = res.counts
+    out = [
+        f"Username scan run {res.run_id} for `{subject_id}` ({', '.join(res.usernames)}): {c['sites']} site(s) checked, "
+        f"{c['skipped_sites']} skipped (challenge-protected or filtered); **{c['found']} account(s) found**, {c['new']} new, "
+        f"{c['missing']} absent, {c['unknown']} unclear.",
+        CREDIT,
+    ]
+    if res.found:
+        out += ["", exposures_list(subject_id, kind="account", status="candidate")]
+    return "\n".join(out)
+
+
+def scan_mentions(subject_id: str) -> str:
+    """Search the web (Brave Search API, needs BRAVE_API_KEY) for the subject's name with
+    city, phone numbers and emails. Results are shown here and not stored (Brave's terms);
+    pass the URLs that are about the subject to mentions_confirm. Results on a known
+    broker's site are flagged. Needs consent."""
+    from unlist.scanners.mentions import scan_mentions as run
+
+    try:
+        res = run(_conn(), subject_id)
+    except ConsentError as exc:
+        return f"Refused: {exc}"
+    if res.skipped:
+        return f"Not run: {res.skipped}."
+    lines = [f"{len(res.queries)} quer(ies), {len(res.mentions)} result(s). Nothing below is stored until you confirm it."]
+    lines += [f"- problem: {e}" for e in res.errors]
+    if res.mentions:
+        lines += ["", table(
+            ["#", "site", "broker", "title", "url", "recorded"],
+            [[i + 1, m.host, m.broker_id or "", m.title[:60], m.url, m.already or ""] for i, m in enumerate(res.mentions)],
+        )]
+    return "\n".join(lines)
+
+
+def mentions_confirm(subject_id: str, urls: str, note: str = "") -> str:
+    """Record web pages (URLs separated by spaces or new lines) as being about the subject.
+    A URL on a known broker's site also becomes a confirmed listing, ready for
+    requests_draft."""
+    from unlist.scanners.mentions import confirm_mention
+
+    conn = _conn()
+    rows = []
+    for url in urls.split():
+        try:
+            eid, fid = confirm_mention(conn, subject_id, url.strip(), note=note)
+            rows.append([url, eid, fid or ""])
+        except (ConsentError, ValueError) as exc:
+            rows.append([url, "", str(exc)])
+    return table(["url", "exposure", "finding"], rows) if rows else "No URLs given."
+
+
+def scan_domains(subject_id: str) -> str:
+    """For domains the subject owns (identifier kind domain): SPF and DMARC (can anyone
+    send mail as this domain?), MX, and hostnames visible in certificate-transparency
+    logs. Not a vulnerability scan. Needs consent."""
+    from unlist.scanners.domains import scan_domains as run
+
+    try:
+        res = run(_conn(), subject_id)
+    except ConsentError as exc:
+        return f"Refused: {exc}"
+    if not res.domains:
+        return "This subject has no domain identifier. Add one with identifier_add kind=domain."
+    lines = [f"Checked {', '.join(res.domains)}."]
+    lines += [f"- issue: {i}" for i in res.issues] or ["- no email-spoofing issues"]
+    lines += [f"- fixed: {i}" for i in res.resolved]
+    lines += [f"- note: {i}" for i in res.info]
+    lines += [f"- problem: {i}" for i in res.errors]
+    return "\n".join(lines)
+
+
+def exposures_list(subject_id: str, kind: str = "", status: str = "") -> str:
+    """Accounts found by username, confirmed web mentions and owned-domain findings.
+    kind: account, mention, domain. status: candidate, confirmed, rejected, resolved."""
+    from unlist.scanners import exposures as X
+
+    rows = X.list_for(_conn(), subject_id, kind or None, status or None)
+    if not rows:
+        return "No exposures match."
+    return table(
+        ["id", "kind", "status", "what", "identifier", "url", "detail", "last seen"],
+        [
+            [r["id"], r["kind"], r["status"], r["title"] or r["key"], r["identifier_value"], (r["url"] or "")[:70],
+             (r["detail_json"] or "")[:60], r["last_seen"][:10]]
+            for r in rows
+        ],
+    )
+
+
+def exposures_confirm(exposure_ids: str, note: str = "") -> str:
+    """Mark exposures (comma-separated ids) as the subject's own, e.g. accounts that are
+    really theirs. Confirmed accounts feed accounts_cleanup and the exposure score."""
+    from unlist.scanners import exposures as X
+
+    conn = _conn()
+    done = []
+    for eid in _ids(exposure_ids):
+        try:
+            X.set_status(conn, eid, "confirmed", note or None)
+            done.append(eid)
+        except KeyError:
+            pass
+    return f"Marked confirmed: {done or 'nothing (ids not found)'}."
+
+
+def exposures_reject(exposure_ids: str, note: str = "") -> str:
+    """Mark exposures (comma-separated ids) as not the subject's (someone else's account
+    with the same handle). 'resolved' is set with exposures_resolve once dealt with."""
+    from unlist.scanners import exposures as X
+
+    conn = _conn()
+    done = []
+    for eid in _ids(exposure_ids):
+        try:
+            X.set_status(conn, eid, "rejected", note or None)
+            done.append(eid)
+        except KeyError:
+            pass
+    return f"Marked rejected: {done or 'nothing (ids not found)'}."
+
+
+def exposures_resolve(exposure_ids: str, note: str = "") -> str:
+    """Mark exposures as dealt with (account deleted, page taken down, record fixed)."""
+    from unlist.scanners import exposures as X
+
+    conn = _conn()
+    done = []
+    for eid in _ids(exposure_ids):
+        try:
+            X.set_status(conn, eid, "resolved", note or None)
+            done.append(eid)
+        except KeyError:
+            pass
+    return f"Marked resolved: {done or 'nothing (ids not found)'}."

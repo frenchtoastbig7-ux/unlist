@@ -16,8 +16,9 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 IdentifierKind = Literal[
-    "name", "alias", "email", "phone", "address", "dob", "username", "relative"
+    "name", "alias", "email", "phone", "address", "dob", "username", "relative", "domain"
 ]
+_DOMAIN = re.compile(r"^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
 SubjectKind = Literal["self", "household"]
 
 US_STATES = {
@@ -111,6 +112,11 @@ class Identifier(BaseModel):
             self.value = normalise_phone(self.value)
             if len(self.value) < 10:
                 raise ValueError("phone needs at least 10 digits")
+        elif self.kind == "domain":
+            self.value = self.value.lower().removeprefix("https://").removeprefix("http://")
+            self.value = self.value.removeprefix("www.").strip("/")
+            if not _DOMAIN.match(self.value):
+                raise ValueError(f"not a domain name: {self.value}")
         elif self.kind == "dob":
             try:
                 date.fromisoformat(self.value)
