@@ -1233,3 +1233,65 @@ def exposures_resolve(exposure_ids: str, note: str = "") -> str:
         except KeyError:
             pass
     return f"Marked resolved: {done or 'nothing (ids not found)'}."
+
+
+# clean-up and score -------------------------------------------------------------------
+
+
+def exposure_score(subject_id: str) -> str:
+    """The subject's exposure score, 0 to 100 (higher is worse), with what each part
+    contributes and the trend. Live listings, breaches by what leaked, pastes and
+    stealer logs, public accounts, mentions, domain issues and overdue requests count;
+    removals lower it."""
+    from unlist.reports.score import score_markdown
+
+    conn = _conn()
+    try:
+        SubjectRepo(conn).get(subject_id)
+    except KeyError as exc:
+        return str(exc)
+    return score_markdown(conn, subject_id)
+
+
+def accounts_cleanup(subject_id: str) -> str:
+    """For accounts you confirmed as yours and services that were breached: where to delete
+    the account, how hard it is, and whether the service takes deletion by email (then
+    account_deletion_draft writes the request). From the JustDeleteMe directory."""
+    from unlist.requests.accounts import cleanup_plan
+
+    try:
+        items = cleanup_plan(_conn(), subject_id)
+    except ConsentError as exc:
+        return f"Refused: {exc}"
+    if not items:
+        return "Nothing to clean up yet: confirm accounts from scan_usernames, or run scan_breaches."
+    return table(
+        ["service", "why", "identifier", "delete at", "difficulty", "by email", "notes"],
+        [[i.service, i.why, i.identifier, i.delete_url or i.profile_url, i.difficulty, i.email, i.notes[:90]] for i in items],
+    )
+
+
+def account_deletion_draft(subject_id: str, service: str) -> str:
+    """Draft an email asking a service (name or domain, from accounts_cleanup) to delete the
+    subject's account. Only for services that accept deletion by email. The draft goes
+    through requests_approve and requests_send like any other request."""
+    from unlist.requests.accounts import draft_account_request
+
+    try:
+        r = draft_account_request(_conn(), subject_id, service)
+    except (ConsentError, ValueError) as exc:
+        return f"Not drafted: {exc}"
+    return f"Drafted request {r['id']} to {r['to_address']} ({r['basis']}). Read it with requests_show, then requests_approve."
+
+
+def google_results_prepare(subject_id: str) -> str:
+    """Google's "Results about you": the steps, the link and the list of your confirmed
+    listing and mention URLs to submit for removal from Search. There is no API; this
+    prepares it and tracks it as a manual request."""
+    from unlist.requests.accounts import google_results_prepare as prep
+
+    try:
+        text, row = prep(_conn(), subject_id)
+    except ConsentError as exc:
+        return f"Refused: {exc}"
+    return f"{text}\n\nTracked as request {row['id']} ({row['state']}); mark it submitted with requests_mark when done."

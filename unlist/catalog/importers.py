@@ -451,3 +451,52 @@ def build_manual_registry(rows: Iterable[dict[str, object]]) -> list[Broker]:
             )
         )
     return brokers
+
+
+# JustDeleteMe (jdm-contrib/jdm, MIT) ------------------------------------------------
+
+JDM_URL = "https://github.com/jdm-contrib/jdm"
+
+
+def read_jdm(path: Path) -> list[dict[str, object]]:
+    """The English fields of _data/sites.json: how to delete an account at each service."""
+    import json
+
+    out = []
+    for item in json.loads(Path(path).read_text(encoding="utf-8")):
+        name = str(item.get("name") or "").strip()
+        url = _clean_url(str(item.get("url") or ""))
+        if not name or not url:
+            continue
+        # The service's own domains; the deletion page may live elsewhere (a help desk,
+        # a GitHub issue), so its host is only a fallback when none are listed.
+        domains = sorted({d.lower().removeprefix("www.") for d in item.get("domains") or [] if d})
+        if not domains and host_of(url):
+            domains = [host_of(url)]
+        entry: dict[str, object] = {
+            "name": name,
+            "url": url,
+            "difficulty": str(item.get("difficulty") or "unknown"),
+            "domains": domains,
+        }
+        if item.get("notes"):
+            entry["notes"] = str(item["notes"]).strip()
+        if item.get("email"):
+            entry["email"] = str(item["email"]).strip().lower()
+        out.append(entry)
+    return sorted(out, key=lambda e: str(e["name"]).lower())
+
+
+def write_jdm(entries: list[dict[str, object]], path: Path) -> Path:
+    import json
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "source": JDM_URL,
+        "license": "MIT (c) Robb Lewis, The JDM Contrib Team and contributors; see JDM-LICENSE",
+        "sites": entries,
+    }
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=0, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return path

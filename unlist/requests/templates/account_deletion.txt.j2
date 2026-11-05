@@ -1,0 +1,12 @@
+To {{ broker_name }}:
+
+Please close my account and delete the personal data associated with it.{% if basis_sentence %} {{ basis_sentence }}{% endif %}
+
+  Account{% if usernames %} username{{ 's' if usernames|length > 1 else '' }}: {{ usernames|join('; ') }}{% endif %}
+{%- if emails %}
+  Email address{{ 'es' if emails|length > 1 else '' }} on the account: {{ emails|join('; ') }}
+{%- endif %}
+  Name: {{ names|join('; ') }}
+
+Please also remove my public profile and any content attributed to it, and confirm when this is done.
+{% include '_closing.txt.j2' %}

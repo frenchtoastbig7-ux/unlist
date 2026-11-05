@@ -30,6 +30,10 @@ def _is_sensitive(data_class: str) -> bool:
     return any(tok in c for tok in _SENSITIVE_TOKENS)
 
 
+def _kind(row: sqlite3.Row) -> str:
+    return row["kind"] if "kind" in row.keys() else "breach"  # noqa: SIM118
+
+
 def _rows(conn: sqlite3.Connection, sql: str, *args: object) -> list[sqlite3.Row]:
     try:
         return conn.execute(sql, args).fetchall()
@@ -42,12 +46,21 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
     parts: list[str] = []
     counts: dict[str, object] = {}
 
-    hits = _rows(
+    from unlist.reports.score import score_markdown
+
+    parts.append("## Score\n")
+    parts.append(score_markdown(conn, subject_id))
+    parts.append("")
+
+    all_hits = _rows(
         conn,
         "SELECT * FROM breach_hits WHERE subject_id=? "
         "ORDER BY COALESCE(breach_date,'') DESC, breach_name",
         subject_id,
     )
+    hits = [h for h in all_hits if _kind(h) == "breach"]
+    pastes = [h for h in all_hits if _kind(h) == "paste"]
+    stealer = [h for h in all_hits if _kind(h) == "stealer"]
     counts["breach_hits"] = len(hits)
     by_name: dict[str, dict] = {}
     for h in hits:
@@ -97,6 +110,40 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
             )
     else:
         parts.append("No breach hits recorded. Run scan_breaches.")
+
+    risks = _rows(
+        conn,
+        "SELECT metric, value_json FROM subject_metrics WHERE subject_id=? AND source='xposedornot'",
+        subject_id,
+    )
+    for r in risks:
+        m = json.loads(r["value_json"])
+        if m.get("risk_label"):
+            parts.append(
+                f"\nXposedOrNot rates {r['metric'].split(':', 1)[-1]} as **{m['risk_label']}** "
+                f"risk ({m.get('risk_score')}/100), with {m.get('pastes', 0)} paste(s)."
+            )
+
+    counts["pastes"] = len(pastes)
+    counts["stealer_sites"] = len(stealer)
+    parts.append("\n## Pastes and stealer logs\n")
+    if pastes or stealer:
+        parts.append(
+            table(
+                ["kind", "where", "date", "identifier", "first seen"],
+                [
+                    [_kind(h), h["title"] or h["breach_name"], h["breach_date"] or "", h["identifier_value"], h["first_seen"][:10]]
+                    for h in (*stealer, *pastes)
+                ],
+            )
+        )
+        if stealer:
+            parts.append(
+                "\n**Act on these:** a stealer log means malware on a device of yours captured the "
+                "saved password for that site. Change it from a clean device and sign out other sessions."
+            )
+    else:
+        parts.append("None recorded (pastes need an HIBP Core key; stealer logs an HIBP Pro plan).")
 
     findings = _rows(
         conn, "SELECT * FROM findings WHERE subject_id=? ORDER BY status, first_seen", subject_id
@@ -149,6 +196,24 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
         )
     else:
         parts.append("None yet. Confirm findings, then requests_draft.")
+
+    exposures = _rows(
+        conn, "SELECT * FROM exposures WHERE subject_id=? ORDER BY kind, status, source, key", subject_id
+    )
+    counts["exposures"] = len(exposures)
+    parts.append("\n## Accounts, web mentions and domains\n")
+    if exposures:
+        parts.append(
+            table(
+                ["id", "kind", "status", "what", "identifier", "url"],
+                [
+                    [e["id"], e["kind"], e["status"], e["title"] or e["key"], e["identifier_value"], (e["url"] or "")[:70]]
+                    for e in exposures
+                ],
+            )
+        )
+    else:
+        parts.append("None recorded. Run scan_usernames, scan_mentions or scan_domains.")
 
     pw = _rows(conn, "SELECT * FROM password_checks ORDER BY checked_at DESC LIMIT 20")
     if pw:
