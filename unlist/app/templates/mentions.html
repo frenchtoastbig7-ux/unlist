@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Web mentions · {{ sid }}</h1>
+{% if not configured %}<p class="msg">No BRAVE_API_KEY in .env. The Brave Search API gives about 1,000 free queries a month (a card is required to sign up).</p>{% endif %}
+<form method="post" action="/subjects/{{ sid }}/mentions"><button>Search the web for this subject</button></form>
+<p class="muted">Searches the name with city, phone numbers and emails. Brave's terms forbid keeping search results, so nothing here is stored: tick the pages that are about this person and record them. A page on a known broker's site becomes a confirmed listing.</p>
+{% if result %}
+  {% for e in result.errors %}<p class="msg">{{ e }}</p>{% endfor %}
+  <p>{{ result.queries|length }} quer{{ 'y' if result.queries|length == 1 else 'ies' }}, {{ result.mentions|length }} result(s).</p>
+  <form method="post" action="/subjects/{{ sid }}/mentions/confirm">
+  <table><tr><th></th><th>site</th><th>broker</th><th>title</th><th>snippet</th><th>recorded</th></tr>
+  {% for m in result.mentions %}<tr><td><input type="checkbox" name="url" value="{{ m.url }}" style="min-width:0"><input type="hidden" name="title:{{ m.url }}" value="{{ m.title }}"></td><td>{{ m.host }}</td><td>{{ m.broker_id or '' }}</td><td><a href="{{ m.url }}" target="_blank" rel="noreferrer">{{ m.title }}</a></td><td class="muted">{{ m.description|truncate(140) }}</td><td>{{ m.already or '' }}</td></tr>{% endfor %}
+  </table>
+  <button>Record the ticked pages as about {{ sid }}</button>
+  </form>
+{% endif %}
+{% endblock %}

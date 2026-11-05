@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Account clean-up · {{ sid }}</h1>
+<p class="muted">Accounts you confirmed as yours, and services where your address was breached, with where to delete the account. Easiest first. From the JustDeleteMe directory (MIT).</p>
+<table><tr><th>service</th><th>why</th><th>identifier</th><th>delete at</th><th>difficulty</th><th>notes</th><th></th></tr>
+{% for i in items %}<tr><td>{{ i.service }}</td><td>{{ i.why }}</td><td>{{ i.identifier }}</td><td>{% if i.delete_url %}<a href="{{ i.delete_url }}" target="_blank" rel="noreferrer">{{ i.delete_url|truncate(50) }}</a>{% elif i.profile_url %}<a href="{{ i.profile_url }}" target="_blank" rel="noreferrer">profile</a>{% endif %}</td><td><span class="tag {{ 'removed' if i.difficulty == 'easy' else 'candidate' if i.difficulty == 'medium' else 'reappeared' }}">{{ i.difficulty }}</span></td><td class="muted">{{ i.notes|truncate(120) }}</td>
+<td>{% if i.email %}<form class="inline" method="post" action="/subjects/{{ sid }}/accounts/draft"><input type="hidden" name="service" value="{{ i.service }}"><button class="small">draft email</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="7" class="muted">Nothing yet: confirm accounts on the Exposures page, or run a breach scan.</td></tr>{% endfor %}
+</table>
+{% endblock %}

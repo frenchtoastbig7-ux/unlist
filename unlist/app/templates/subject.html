@@ -5,6 +5,14 @@
 <p>Consent: {% if consent_state == 'none' %}<span class="tag reappeared">none recorded</span>{% elif consent_state.startswith('EXPIRED') %}<span class="tag reappeared">{{ consent_state }}</span>{% else %}<span class="tag removed">{{ consent_state }}</span>{% endif %}
  · <a href="/subjects/{{ s.id }}/report">exposure report</a>{% if s.is_california %} · <a href="/subjects/{{ s.id }}/drop">California DROP</a>{% endif %}</p>
 
+<div class="scorebox">
+  <div class="big {{ label }}">{{ score }}<span>/100</span></div>
+  <div>
+    <b>Exposure score: {{ label }}</b> <span class="muted">(higher is worse{% if trend|length > 1 %}; trend {% for at, v in trend %}{{ v }}{% if not loop.last %} → {% endif %}{% endfor %}{% endif %})</span>
+    <table class="tight">{% for c in comps %}{% if c.points %}<tr><td>{{ c.name }}</td><td>{{ '%g'|format(c.points) }} of {{ '%g'|format(c.cap) }}</td><td class="muted">{{ c.detail }}</td></tr>{% endif %}{% endfor %}</table>
+  </div>
+</div>
+
 <form method="post" action="/subjects/{{ s.id }}/consent" class="row">
   <label>holder<input name="holder" value="{{ s.consent.holder if s.consent else s.label }}" required></label>
   <label>instrument<input name="instrument" value="{{ s.consent.instrument if s.consent else 'self-declaration: my own data' }}" required></label>
@@ -22,7 +30,7 @@
 {% else %}<tr><td colspan="6" class="muted">None yet. Brokers index by name and place, so add names and addresses with city and state.</td></tr>{% endfor %}
 </table>
 <form method="post" action="/subjects/{{ s.id }}/identifiers" class="row">
-  <label>kind<select name="kind">{% for k in ['name','alias','email','phone','address','dob','username','relative'] %}<option>{{ k }}</option>{% endfor %}</select></label>
+  <label>kind<select name="kind">{% for k in ['name','alias','email','phone','address','dob','username','relative','domain'] %}<option>{{ k }}</option>{% endfor %}</select></label>
   <label>value<input name="value" required placeholder="Jane Q Doe / jane@example.com / 1982-06-15"></label>
   <label>current<select name="current"><option value="1">yes</option><option value="0">past</option></select></label>
   <label>city<input name="city"></label>
@@ -39,14 +47,32 @@
 <form method="post" action="/subjects/{{ s.id }}/scan/breaches" class="inline"><button>Scan breaches</button></form>
 <form method="post" action="/subjects/{{ s.id }}/scan/brokers" class="inline" style="margin-left:8px">
   <select name="use_browser"><option value="1">with browser</option><option value="0">HTTP only</option></select>
-  <input name="brokers" placeholder="broker ids (blank = all searchable)" style="min-width:260px">
+  <select name="kinds"><option value="">name, phone and address</option><option value="name">name only</option><option value="phone">phone only</option><option value="address">address only</option></select>
+  <input name="brokers" placeholder="broker ids (blank = all searchable)" style="min-width:220px">
   <button>Scan people-search sites</button>
 </form>
+<p>
+<form method="post" action="/subjects/{{ s.id }}/scan/usernames" class="inline">
+  <input name="limit" type="number" min="0" value="0" title="0 = every site" style="min-width:70px;width:70px">
+  <input name="categories" placeholder="categories (blank = all)" style="min-width:170px">
+  <button>Scan usernames</button>
+</form>
+<form method="post" action="/subjects/{{ s.id }}/scan/domains" class="inline" style="margin-left:8px"><button>Check owned domains</button></form>
+<a href="/subjects/{{ s.id }}/mentions" style="margin-left:8px"><button class="quiet">Web mentions</button></a>
+<a href="/subjects/{{ s.id }}/accounts" style="margin-left:8px"><button class="quiet">Account clean-up</button></a>
+<form method="post" action="/subjects/{{ s.id }}/google" class="inline" style="margin-left:8px"><button class="quiet">Google results prep</button></form>
+</p>
 
 <h2>Breach hits ({{ hits|length }})</h2>
-<table><tr><th>breach</th><th>date</th><th>address</th><th>data exposed</th><th>source</th><th>first seen</th></tr>
-{% for h in hits %}<tr><td>{{ h.title or h.breach_name }}</td><td>{{ h.breach_date or '' }}</td><td>{{ h.identifier_value }}</td><td class="muted">{{ json.loads(h.data_classes_json or '[]')|join(', ')|truncate(90) }}</td><td>{{ h.source }}</td><td>{{ h.first_seen[:10] }}</td></tr>{% else %}<tr><td colspan="6" class="muted">none recorded</td></tr>{% endfor %}
+<table><tr><th>kind</th><th>breach</th><th>date</th><th>identifier</th><th>data exposed</th><th>source</th><th>first seen</th></tr>
+{% for h in hits %}<tr><td>{{ h.kind }}</td><td>{{ h.title or h.breach_name }}</td><td>{{ h.breach_date or '' }}</td><td>{{ h.identifier_value }}</td><td class="muted">{{ json.loads(h.data_classes_json or '[]')|join(', ')|truncate(90) }}</td><td>{{ h.source }}</td><td>{{ h.first_seen[:10] }}</td></tr>{% else %}<tr><td colspan="7" class="muted">none recorded</td></tr>{% endfor %}
 </table>
+
+<h2>Accounts, mentions and domains ({{ exposures|length }})</h2>
+<table><tr><th>id</th><th>kind</th><th>status</th><th>what</th><th>identifier</th><th>url</th></tr>
+{% for e in exposures %}<tr><td>{{ e.id }}</td><td>{{ e.kind }}</td><td><span class="tag {{ e.status }}">{{ e.status }}</span></td><td>{{ e.title or e.key }}</td><td>{{ e.identifier_value }}</td><td class="muted">{% if e.url %}<a href="{{ e.url }}" target="_blank" rel="noreferrer">{{ e.url|truncate(60) }}</a>{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="muted">none yet; add a username or domain identifier and scan</td></tr>{% endfor %}
+</table>
+{% if exposures %}<p><a href="/exposures?subject={{ s.id }}">review them</a></p>{% endif %}
 
 <h2>Listings ({{ findings|length }})</h2>
 <table><tr><th>id</th><th>broker</th><th>status</th><th>score</th><th>listing</th><th>last seen</th></tr>

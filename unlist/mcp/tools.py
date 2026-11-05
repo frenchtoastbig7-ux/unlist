@@ -58,7 +58,9 @@ def status() -> str:
         f"findings: {_count(conn, 'SELECT COUNT(*) FROM findings')}; "
         f"requests: {_count(conn, 'SELECT COUNT(*) FROM requests')}",
         f"- Audit log: {'intact' if ok else 'PROBLEM'} ({detail})",
-        f"- Credentials: {_env_state('HIBP_API_KEY', 'UNLIST_SMTP_PASSWORD')}",
+        f"- Exposures: {_count(conn, 'SELECT COUNT(*) FROM exposures')}; "
+        f"breach hits: {_count(conn, 'SELECT COUNT(*) FROM breach_hits')}",
+        f"- Credentials: {_env_state('HIBP_API_KEY', 'LEAKCHECK_API_KEY', 'BRAVE_API_KEY', 'UNLIST_SMTP_PASSWORD')}",
         "",
     ]
     today = date.today()
@@ -489,9 +491,12 @@ def _browser(use_browser: bool):
     return BrowserSession()
 
 
-def scan_brokers(subject_id: str, brokers: str = "", use_browser: bool = True) -> str:
-    """Search people-search sites for the subject's names and places. brokers: comma-
-    separated catalog ids, default every searchable site. Plain HTTP first; when a site
+def scan_brokers(
+    subject_id: str, brokers: str = "", use_browser: bool = True, kinds: str = ""
+) -> str:
+    """Search people-search sites by the subject's names and places, phone numbers and
+    street addresses (kinds: comma-separated subset of name, phone, address; default all).
+    brokers: comma-separated catalog ids, default every searchable site. Plain HTTP first; when a site
     refuses, a visible Chromium window opens and does what you would do by hand (if it
     shows a CAPTCHA, deal with it there; the tool waits). Listings become candidate
     findings for you to confirm. Slow: several seconds per site. Needs consent."""
@@ -515,7 +520,10 @@ def scan_brokers(subject_id: str, brokers: str = "", use_browser: bool = True) -
             browser = None
             note = f"\n- browser unavailable, HTTP only: {exc}"
         try:
-            res = run_scan(conn, subject_id, brokers=chosen, browser=browser)
+            chosen_kinds = tuple(k.strip() for k in kinds.split(",") if k.strip()) or (
+                "name", "phone", "address",
+            )  # fmt: skip
+            res = run_scan(conn, subject_id, brokers=chosen, browser=browser, kinds=chosen_kinds)
         except ConsentError as exc:
             return f"Refused: {exc}"
     finally:
@@ -859,7 +867,9 @@ def requests_approve(request_ids: str) -> str:
 def requests_send(request_ids: str = "", dry_run: bool = False) -> str:
     """Send approved email requests from the opt-out mailbox (UNLIST_SMTP_* in .env).
     Default: every approved email request; or comma-separated ids. dry_run shows what
-    would go without sending. Only approved requests are ever sent."""
+    would go without sending. At most UNLIST_SEND_DAILY_CAP (default 40) go out per day,
+    people-search sites first; the rest stay approved and the monitor sends the next
+    share each day. Only approved requests are ever sent."""
     from unlist.requests import send_approved
     from unlist.requests.engine import list_for
     from unlist.requests.mailer import FakeMailer, Mailer, SmtpSettings

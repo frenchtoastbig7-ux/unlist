@@ -29,11 +29,12 @@ def seed(conn):
 def test_due_logic_and_report(conn, data_dir, monkeypatch):
     monkeypatch.setenv("UNLIST_NO_NOTIFY", "1")
     seed(conn)
-    quiet = {"breaches", "verify_listings", "brokers_full", "inbox"}
-    s = run_due(conn, only=set(JOBS) - quiet, use_browser=False)
-    assert set(s.ran) == {"deadlines", "drop_cycle", "followups"} and not s.changes
+    assert len(JOBS) == 11
+    chosen = {"deadlines", "drop_cycle", "followups"}
+    s = run_due(conn, only=chosen, use_browser=False)
+    assert set(s.ran) == chosen and not s.changes
     assert s.report_path and "Monitor run" in pathlib.Path(s.report_path).read_text()
-    s2 = run_due(conn, only=set(JOBS) - quiet, use_browser=False)
+    s2 = run_due(conn, only=chosen, use_browser=False)
     assert s2.ran == [] and set(s2.skipped) == {"deadlines", "drop_cycle", "followups"}
     s3 = run_due(conn, only={"deadlines"}, force=True, use_browser=False)
     assert s3.ran == ["deadlines"]
@@ -120,3 +121,47 @@ def test_mcp_monitor_tools(conn, data_dir, monkeypatch):
     name = next(line.split("|")[1].strip() for line in listing.splitlines() if "monitor/" in line)
     assert "Monitor run" in tools.report_read(name)
     assert "No report" in tools.report_read("../../etc/passwd")
+
+
+def test_daily_send_cap_and_queue_job(conn, data_dir, monkeypatch):
+    from unlist.requests import draft_blind
+    from unlist.requests.engine import daily_cap, sent_today
+
+    monkeypatch.setenv("UNLIST_NO_NOTIFY", "1")
+    monkeypatch.setenv("UNLIST_SEND_DAILY_CAP", "3")
+    seed(conn)
+    rows = draft_blind(conn, "me", only_registry=False, limit=7)
+    assert len(rows) == 7
+    approve(conn, [r["id"] for r in rows])
+    mailer = FakeMailer()
+    results = send_approved(conn, mailer)
+    assert daily_cap() == 3 and sent_today(conn) == 3 and len(mailer.sent) == 3
+    held = [d for _, ok, d in results if not ok]
+    assert len(held) == 4 and all(d.startswith("held") for d in held)
+    assert len(list_for(conn, "me", "approved")) == 4  # the rest stay approved
+    # a second call the same day sends nothing more
+    assert sum(1 for _, ok, _ in send_approved(conn, mailer) if ok) == 0 and len(mailer.sent) == 3
+    # people-search brokers were first in line
+    from unlist.catalog import load_catalog
+
+    cat = load_catalog()
+    sent_ids = [r["broker_id"] for r in list_for(conn, "me", "sent")]
+    assert all(cat.get(b).category == "people-search" for b in sent_ids)
+    # the queue job reports what waits when no mailbox is configured
+    for k in ("UNLIST_SMTP_HOST", "UNLIST_SMTP_USER", "UNLIST_SMTP_PASSWORD"):
+        monkeypatch.delenv(k, raising=False)
+    s = run_due(conn, only={"send_queue"}, force=True, use_browser=False)
+    assert any("wait for a mailbox" in p for p in s.problems)
+
+
+def test_score_job_reports_changes(conn, data_dir, monkeypatch):
+    monkeypatch.setenv("UNLIST_NO_NOTIFY", "1")
+    seed(conn)
+    s = run_due(conn, only={"score"}, force=True, use_browser=False)
+    assert not s.changes  # first reading: nothing to compare with
+    fid, _ = F.upsert_candidate(conn, "me", "spokeo", Candidate(listing_url="https://www.spokeo.com/p/1", name_text="Jane Doe", score=0.9), None)
+    F.set_status(conn, fid, "confirmed")
+    s = run_due(conn, only={"score"}, force=True, use_browser=False)
+    assert any("exposure score 0 → 6" in c for c in s.changes)
+    s = run_due(conn, only={"usernames", "domains"}, force=True, use_browser=False)
+    assert set(s.ran) == {"usernames", "domains"} and not s.problems  # no usernames or domains: nothing to do

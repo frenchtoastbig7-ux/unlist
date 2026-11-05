@@ -17,7 +17,9 @@ from unlist.catalog import load_catalog
 from unlist.core.audit import AuditLog
 from unlist.db import open_db
 from unlist.monitor.run import JOBS, jobs_status
+from unlist.reports.score import exposure_score, label_for, record_score, trend
 from unlist.requests import engine
+from unlist.scanners import exposures as X
 from unlist.scanners.brokers import findings as F
 from unlist.subjects import Consent, ConsentError, Identifier, Subject, SubjectRepo
 
@@ -64,8 +66,14 @@ def _consent_state(s: Subject) -> str:
 def overview(request: Request):
     c = conn()
     repo = SubjectRepo(c)
-    subjects = [(s, _consent_state(s)) for s in repo.list()]
+    subjects = []
+    for s in repo.list():
+        score, _ = exposure_score(c, s.id)
+        subjects.append((s, _consent_state(s), score, label_for(score)))
     counts = {
+        "exposures": c.execute(
+            "SELECT COUNT(*) FROM exposures WHERE status='candidate'"
+        ).fetchone()[0],
         "breach_hits": c.execute("SELECT COUNT(*) FROM breach_hits").fetchone()[0],
         "candidates": c.execute(
             "SELECT COUNT(*) FROM findings WHERE status='candidate'"
@@ -154,6 +162,7 @@ def subject_show(request: Request, sid: str):
     ).fetchall()
     findings = F.list_for(c, sid)
     requests_ = engine.list_for(c, sid)
+    score, comps, _ = record_score(c, sid)
     return render(
         request,
         "subject.html",
@@ -163,6 +172,11 @@ def subject_show(request: Request, sid: str):
         findings=findings,
         requests=requests_,
         json=json,
+        score=score,
+        label=label_for(score),
+        comps=comps,
+        trend=trend(c, sid),
+        exposures=X.list_for(c, sid),
     )
 
 
@@ -266,7 +280,13 @@ def scan_breaches(request: Request, sid: str):
 
 
 @router.post("/subjects/{sid}/scan/brokers")
-def scan_brokers(request: Request, sid: str, use_browser: str = Form("1"), brokers: str = Form("")):
+def scan_brokers(
+    request: Request,
+    sid: str,
+    use_browser: str = Form("1"),
+    brokers: str = Form(""),
+    kinds: str = Form(""),
+):
     from unlist.scanners.brokers import scan_brokers as run
     from unlist.scanners.brokers.browser import BrowserSession, BrowserUnavailable
 
@@ -287,7 +307,8 @@ def scan_brokers(request: Request, sid: str, use_browser: str = Form("1"), broke
             except BrowserUnavailable as exc:
                 ctx.log(f"browser unavailable, HTTP only: {exc}")
         try:
-            res = run(ctx.conn, sid, brokers=chosen, browser=browser)
+            chosen_kinds = tuple(k for k in kinds.split(",") if k) or ("name", "phone", "address")
+            res = run(ctx.conn, sid, brokers=chosen, browser=browser, kinds=chosen_kinds)
         finally:
             if browser is not None:
                 browser.close()
@@ -716,11 +737,14 @@ def report_read(request: Request, tool: str, name: str):
 
 
 @router.get("/catalog", response_class=HTMLResponse)
-def catalog_list(request: Request, q: str = "", category: str = ""):
+def catalog_list(request: Request, q: str = "", category: str = "", searchable: str = ""):
     cat = load_catalog()
-    brokers = cat.search(q, limit=1000) if q else list(cat)
+    brokers = cat.search(q, limit=2000) if q else list(cat)
     if category:
         brokers = [b for b in brokers if b.category == category]
+    if searchable:
+        brokers = [b for b in brokers if b.searchable]
+    brokers.sort(key=lambda b: (not b.searchable, b.origin != "curated", b.id))
     return render(
         request,
         "catalog.html",
@@ -729,6 +753,7 @@ def catalog_list(request: Request, q: str = "", category: str = ""):
         q=q,
         category=category,
         categories=sorted(cat.by_category()),
+        searchable=searchable,
     )
 
 
@@ -759,4 +784,145 @@ def audit(request: Request):
     ok, detail = log.verify()
     return render(
         request, "audit.html", ok=ok, detail=detail, entries=log.entries(200)[::-1], json=json
+    )
+
+
+# footprint, clean-up ----------------------------------------------------------------
+
+
+@router.post("/subjects/{sid}/scan/usernames")
+def scan_usernames(request: Request, sid: str, limit: int = Form(0), categories: str = Form("")):
+    from unlist.scanners.usernames import scan_usernames as run
+
+    cats = {x.strip() for x in categories.split(",") if x.strip()} or None
+
+    def job(ctx: JobContext) -> str:
+        ctx.log(f"username scan for {sid}; one request per site, this takes a few minutes")
+        res = run(ctx.conn, sid, limit=limit or None, categories=cats)
+        for n in res.notes:
+            ctx.log(n)
+        ctx.log(json.dumps(res.counts))
+        ctx.log("Uses data from the WhatsMyName project (CC BY-SA 4.0).")
+        return f"{res.found} account(s) found, {res.new} new, on {res.sites} site(s)"
+
+    jid = runner(request).submit("scan usernames", job, {"subject": sid})
+    return back(f"/jobs/{jid}")
+
+
+@router.post("/subjects/{sid}/scan/domains")
+def scan_domains(request: Request, sid: str):
+    from unlist.scanners.domains import scan_domains as run
+
+    def job(ctx: JobContext) -> str:
+        res = run(ctx.conn, sid)
+        for line in (*res.issues, *res.resolved, *res.info, *res.errors):
+            ctx.log(line)
+        return f"{len(res.issues)} issue(s) on {len(res.domains)} domain(s)"
+
+    jid = runner(request).submit("scan domains", job, {"subject": sid})
+    return back(f"/jobs/{jid}")
+
+
+@router.get("/exposures", response_class=HTMLResponse)
+def exposures_list(request: Request, subject: str = "", kind: str = "", status: str = ""):
+    c = conn()
+    subjects = SubjectRepo(c).list()
+    rows = []
+    for s in subjects:
+        if subject and s.id != subject:
+            continue
+        rows += X.list_for(c, s.id, kind or None, status or None)
+    return render(
+        request,
+        "exposures.html",
+        rows=rows,
+        subjects=subjects,
+        subject=subject,
+        kind=kind,
+        status=status,
+        kinds=X.KINDS,
+        statuses=X.STATUSES,
+    )
+
+
+@router.post("/exposures/{eid}/status")
+def exposure_status(request: Request, eid: int, status: str = Form(...), next: str = Form("")):
+    try:
+        X.set_status(conn(), eid, status)
+    except (KeyError, ValueError) as exc:
+        return back(next or "/exposures", str(exc))
+    return back(next or "/exposures", f"Exposure {eid} marked {status}.")
+
+
+@router.get("/subjects/{sid}/mentions", response_class=HTMLResponse)
+def mentions_page(request: Request, sid: str):
+    import os
+
+    return render(
+        request, "mentions.html", sid=sid, result=None,
+        configured=bool(os.environ.get("BRAVE_API_KEY")),
+    )  # fmt: skip
+
+
+@router.post("/subjects/{sid}/mentions", response_class=HTMLResponse)
+def mentions_run(request: Request, sid: str):
+    """Runs in the request, not as a job: results are shown and never written anywhere."""
+    from unlist.scanners.mentions import scan_mentions
+
+    try:
+        result = scan_mentions(conn(), sid)
+    except ConsentError as exc:
+        return back(f"/subjects/{sid}/mentions", f"Refused: {exc}")
+    return render(request, "mentions.html", sid=sid, result=result, configured=not result.skipped)
+
+
+@router.post("/subjects/{sid}/mentions/confirm")
+async def mentions_confirm(request: Request, sid: str):
+    from unlist.scanners.mentions import confirm_mention
+
+    form = await request.form()
+    urls = [str(u) for u in form.getlist("url")]
+    c = conn()
+    n = 0
+    for u in urls:
+        try:
+            confirm_mention(c, sid, u, title=str(form.get("title:" + u) or ""))
+            n += 1
+        except (ConsentError, ValueError):
+            continue
+    return back(f"/exposures?subject={sid}&kind=mention", f"Recorded {n} page(s) as about {sid}.")
+
+
+@router.get("/subjects/{sid}/accounts", response_class=HTMLResponse)
+def accounts_page(request: Request, sid: str):
+    from unlist.requests.accounts import cleanup_plan
+
+    try:
+        items = cleanup_plan(conn(), sid)
+    except ConsentError as exc:
+        return back(f"/subjects/{sid}", f"Refused: {exc}")
+    return render(request, "accounts.html", sid=sid, items=items)
+
+
+@router.post("/subjects/{sid}/accounts/draft")
+def accounts_draft(request: Request, sid: str, service: str = Form(...)):
+    from unlist.requests.accounts import draft_account_request
+
+    try:
+        r = draft_account_request(conn(), sid, service)
+    except (ConsentError, ValueError) as exc:
+        return back(f"/subjects/{sid}/accounts", f"Not drafted: {exc}")
+    return back(f"/requests/{r['id']}", "Drafted. Read it, then approve.")
+
+
+@router.post("/subjects/{sid}/google")
+def google_prepare(request: Request, sid: str):
+    from unlist.requests.accounts import google_results_prepare
+
+    try:
+        _, row = google_results_prepare(conn(), sid)
+    except ConsentError as exc:
+        return back(f"/subjects/{sid}", f"Refused: {exc}")
+    return back(
+        f"/requests/{row['id']}", "Prepared. Submit at Google, then set the state to submitted."
     )

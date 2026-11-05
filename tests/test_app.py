@@ -105,3 +105,34 @@ def test_jobs_run_in_background(client, conn, monkeypatch):
         time.sleep(0.1)
     assert "no mailbox configured" in page
     assert "monitor" in client.get("/monitor").text
+
+
+def test_phase2_pages(client, conn, monkeypatch):
+    from unlist.scanners import exposures as X
+
+    monkeypatch.delenv("BRAVE_API_KEY", raising=False)
+    fid = seed(conn)
+    F.set_status(conn, fid, "confirmed")
+    eid, _ = X.upsert(conn, "me", "janedoe82", "account", "whatsmyname", "GitHub (User)", title="GitHub (User)", url="https://github.com/janedoe82")
+    conn.commit()
+    page = client.get("/subjects/me").text
+    assert "Exposure score" in page and "live listings" in page and "Scan usernames" in page and "GitHub (User)" in page
+    assert "moderate" in client.get("/").text or "low" in client.get("/").text
+    page = client.get("/exposures?subject=me&kind=account").text
+    assert "GitHub (User)" in page and "mine" in page
+    r = client.post(f"/exposures/{eid}/status", data={"status": "confirmed", "next": "/exposures"}, headers=ORIGIN, follow_redirects=True)
+    assert "marked confirmed" in r.text
+    page = client.get("/subjects/me/accounts").text
+    assert "GitHub" in page and "easy" in page
+    page = client.get("/subjects/me/mentions").text
+    assert "BRAVE_API_KEY" in page
+    r = client.post("/subjects/me/mentions", headers=ORIGIN)
+    assert r.status_code == 200 and "BRAVE_API_KEY" in r.text
+    r = client.post("/subjects/me/mentions/confirm", data={"url": ["https://news.example/jane"]}, headers=ORIGIN, follow_redirects=True)
+    assert "Recorded 1 page" in r.text and "news.example" in r.text
+    r = client.post("/subjects/me/google", headers=ORIGIN, follow_redirects=True)
+    assert "results-about-you" in r.text and "catalog</a>" not in r.text
+    assert "phone" in client.get("/catalog?searchable=1").text
+    assert "confirmed against the live site" in client.get("/catalog/fastpeoplesearch").text
+    r = client.post("/subjects/me/scan/domains", headers=ORIGIN, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"].startswith("/jobs/")

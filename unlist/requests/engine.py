@@ -336,7 +336,11 @@ def draft_blind(
     category, optionally only those in the California registry."""
     catalog = load_catalog()
     out = []
-    for b in catalog:
+    ordered = sorted(
+        catalog,
+        key=lambda b: (b.category != "people-search", not b.disclosures, b.id),
+    )
+    for b in ordered:
         if b.status != "active":
             continue
         if category and b.category != category:
@@ -405,14 +409,64 @@ def mark_sent(
     return get(conn, request_id)
 
 
+DEFAULT_DAILY_CAP = 40
+
+
+def daily_cap() -> int:
+    import os
+
+    try:
+        return max(0, int(os.environ.get("UNLIST_SEND_DAILY_CAP") or DEFAULT_DAILY_CAP))
+    except ValueError:
+        return DEFAULT_DAILY_CAP
+
+
+def sent_today(conn: sqlite3.Connection) -> int:
+    today = now_iso()[:10]
+    return int(
+        conn.execute(
+            "SELECT COUNT(*) FROM requests WHERE channel='email' AND sent_at >= ?", (today,)
+        ).fetchone()[0]
+    )
+
+
+def _send_priority(row: sqlite3.Row, catalog) -> tuple[int, int]:
+    """People-search sites first (they are what strangers use), then brokers that disclose
+    sensitive data, then the rest; oldest approval first within each."""
+    rank = 2
+    if row["broker_id"] in catalog:
+        b = catalog.get(row["broker_id"])
+        if b.category == "people-search":
+            rank = 0
+        elif b.disclosures:
+            rank = 1
+    elif json.loads(row["listings_json"] or "[]"):
+        rank = 0
+    return rank, row["id"]
+
+
 def send_approved(
-    conn: sqlite3.Connection, mailer, request_ids: Iterable[int] | None = None
+    conn: sqlite3.Connection,
+    mailer,
+    request_ids: Iterable[int] | None = None,
+    *,
+    cap: int | None = None,
 ) -> list[tuple[int, bool, str]]:
-    """Send every approved email request (or the given ones). Nothing else is ever sent."""
+    """Send approved email requests, at most the daily cap (UNLIST_SEND_DAILY_CAP, 40).
+
+    A mailbox that suddenly sends a thousand near-identical messages gets throttled or
+    flagged, so a large approved batch goes out over days; what is held stays approved
+    and the monitor's send_queue job sends the next share tomorrow. Nothing that is not
+    approved is ever sent.
+    """
     if request_ids is None:
         rows = [r for r in list_for(conn, None, "approved") if r["channel"] == "email"]
     else:
         rows = [get(conn, rid) for rid in request_ids]
+    catalog = load_catalog()
+    rows.sort(key=lambda r: _send_priority(r, catalog))
+    cap = daily_cap() if cap is None else cap
+    room = max(0, cap - sent_today(conn))
     out: list[tuple[int, bool, str]] = []
     for row in rows:
         rid = row["id"]
@@ -422,6 +476,9 @@ def send_approved(
         if row["channel"] != "email":
             out.append((rid, False, f"channel {row['channel']} is not sent by email"))
             continue
+        if room <= 0:
+            out.append((rid, False, f"held: daily cap of {cap} reached; goes out on a later day"))
+            continue
         try:
             msg_id = mailer.send(row["to_address"], row["subject_line"], row["body"], row["tag"])
         except Exception as exc:
@@ -429,6 +486,7 @@ def send_approved(
             conn.commit()
             out.append((rid, False, f"send failed: {exc}"))
             continue
+        room -= 1
         _store_sent_copy(conn, row)
         mark_sent(conn, rid, "sent", f"to {row['to_address']}; message id {msg_id}")
         out.append((rid, True, f"sent to {row['to_address']}"))

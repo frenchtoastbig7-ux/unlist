@@ -4,7 +4,9 @@
 {% if b.aka %}<p>Also known as: {{ b.aka|join(', ') }}</p>{% endif %}
 <p>Hosts: {{ b.hosts|join(', ') or '-' }} · Registered: {% if b.registry.ca %}CA #{{ b.registry.ca }}{% endif %}{% if b.registry.vt %} VT{% endif %}{% if b.registry.tx %} TX{% endif %}{% if b.registry.or_ %} OR{% endif %}</p>
 <p>Contact: {{ b.contact.privacy_email or '-' }} · {% if b.contact.privacy_url %}<a href="{{ b.contact.privacy_url }}" target="_blank" rel="noreferrer">privacy page</a>{% endif %} · {{ b.contact.phone or '' }}{% if b.contact.postal %}<br>Postal: {{ b.contact.postal }}{% endif %}</p>
-<p>Search: {{ b.search.method }}{% if b.search.template %} <code>{{ b.search.template }}</code> via {{ b.search.fetch }}{% endif %}</p>
+<p>Search: {{ b.search.method }}{% if b.search.kinds %} via {{ b.search.fetch }}; confirmed against the live site: {{ b.search.verified|join(', ') or 'none yet' }}{% endif %}
+{% for kind in b.search.kinds %}<br>{{ kind }}: <code>{{ b.search.template_for(kind) }}</code>{% endfor %}
+{% if b.search.notes %}<br><span class="muted">{{ b.search.notes }}</span>{% endif %}</p>
 <p>Opt-out: <b>{{ b.opt_out.method }}</b> {% if b.opt_out.url %}<a href="{{ b.opt_out.url }}" target="_blank" rel="noreferrer">{{ b.opt_out.url }}</a>{% endif %} {{ b.opt_out.email or '' }} · requires {{ b.opt_out.requires|join(', ') or 'nothing special' }} · captcha {{ b.opt_out.captcha }}{% if b.opt_out.notes %}<br><span class="muted">{{ b.opt_out.notes }}</span>{% endif %}</p>
 {% if b.opt_out.form %}<p class="muted">Form playbook: {{ b.opt_out.form.fields }} · stop before {{ b.opt_out.form.stop_before }}{% if b.opt_out.form.notes %} · {{ b.opt_out.form.notes }}{% endif %}</p>{% endif %}
 {% if b.disclosures %}<p>Registry disclosures: {{ b.disclosures|join(', ') }}</p>{% endif %}

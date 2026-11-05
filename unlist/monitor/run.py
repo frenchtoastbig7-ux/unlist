@@ -34,6 +34,10 @@ JOBS: dict[str, tuple[str, str]] = {
     "drop_cycle": ("1d", "remind about the 45-day DROP cycle"),
     "followups": ("1d", "draft follow-ups for listings that reappeared"),
     "inbox": ("1d", "read the opt-out mailbox if configured"),
+    "send_queue": ("1d", "send the day's share of approved email requests"),
+    "usernames": ("30d", "re-check where the subjects' usernames exist"),
+    "domains": ("7d", "re-check SPF, DMARC and certificate logs for owned domains"),
+    "score": ("1d", "recompute exposure scores and note changes"),
 }
 
 ESCALATION = {
@@ -350,6 +354,79 @@ def _job_inbox(conn, _subjects, s: RunSummary, _browser) -> None:
     _done(conn, "inbox", f"{len(results)} message(s)")
 
 
+def _job_send_queue(conn, _subjects, s: RunSummary, _browser) -> None:
+    from unlist.requests.mailer import Mailer, SmtpSettings
+
+    waiting = [r for r in engine.list_for(conn, None, "approved") if r["channel"] == "email"]
+    if not waiting:
+        _done(conn, "send_queue", "nothing approved")
+        return
+    settings = SmtpSettings.from_env()
+    if settings is None:
+        _done(conn, "send_queue", f"{len(waiting)} approved, no mailbox configured")
+        s.problems.append(f"{len(waiting)} approved email request(s) wait for a mailbox in .env")
+        return
+    results = engine.send_approved(conn, Mailer(settings))
+    sent = sum(1 for _, ok, _ in results if ok)
+    held = sum(1 for _, ok, d in results if not ok and d.startswith("held"))
+    failed = [d for _, ok, d in results if not ok and not d.startswith("held")]
+    if sent:
+        s.changes.append(f"sent {sent} approved request(s); {held} held for the daily cap")
+    s.problems.extend(f"send: {d}" for d in failed)
+    _done(conn, "send_queue", f"{sent} sent, {held} held, {len(failed)} failed")
+
+
+def _job_usernames(conn, subjects, s: RunSummary, _browser) -> None:
+    from unlist.scanners.usernames import scan_usernames
+
+    new = 0
+    for subj in subjects:
+        if not subj.of_kind("username"):
+            continue
+        try:
+            res = scan_usernames(conn, subj.id)
+        except Exception as exc:
+            s.problems.append(f"usernames {subj.id}: {exc}")
+            continue
+        new += res.new
+        if res.new:
+            s.changes.append(f"{subj.id}: {res.new} new account(s) under your usernames to review")
+    _done(conn, "usernames", f"{new} new")
+
+
+def _job_domains(conn, subjects, s: RunSummary, _browser) -> None:
+    from unlist.scanners.domains import scan_domains
+
+    issues = 0
+    for subj in subjects:
+        if not subj.of_kind("domain"):
+            continue
+        try:
+            res = scan_domains(conn, subj.id)
+        except Exception as exc:
+            s.problems.append(f"domains {subj.id}: {exc}")
+            continue
+        issues += len(res.issues)
+        s.changes.extend(f"{subj.id}: {r}" for r in res.resolved)
+        s.problems.extend(f"domains {subj.id}: {e}" for e in res.errors)
+    _done(conn, "domains", f"{issues} open issue(s)")
+
+
+def _job_score(conn, subjects, s: RunSummary, _browser) -> None:
+    from unlist.reports.score import label_for, record_score, trend
+
+    notes = []
+    for subj in subjects:
+        before = trend(conn, subj.id, 1)
+        score, _comps, changed = record_score(conn, subj.id)
+        notes.append(f"{subj.id} {score}")
+        if changed and before and before[-1][1] != score:
+            s.changes.append(
+                f"{subj.id}: exposure score {before[-1][1]} → {score} ({label_for(score)})"
+            )
+    _done(conn, "score", ", ".join(notes) or "no subjects")
+
+
 _JOB_FUNCS = {
     "breaches": _job_breaches,
     "verify_listings": _job_verify,
@@ -358,6 +435,10 @@ _JOB_FUNCS = {
     "drop_cycle": _job_drop,
     "followups": _job_followups,
     "inbox": _job_inbox,
+    "send_queue": _job_send_queue,
+    "usernames": _job_usernames,
+    "domains": _job_domains,
+    "score": _job_score,
 }
 
 
