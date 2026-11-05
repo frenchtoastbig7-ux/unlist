@@ -1,0 +1,6 @@
+{"BreachesSummary":{"site":"Adobe;Collection1"},
+ "ExposedBreaches":{"breaches_details":[
+  {"breach":"Adobe","domain":"adobe.com","industry":"Software","password_risk":"hardtocrack","xposed_data":"Email addresses;Password hints;Passwords;Usernames","xposed_date":"2013","xposed_records":152445165,"verified":"Yes"},
+  {"breach":"Collection1","domain":"","industry":"","password_risk":"plaintext","xposed_data":"Email addresses;Passwords","xposed_date":"2019","xposed_records":772904991,"verified":"No"}]},
+ "BreachMetrics":{"risk":[{"risk_label":"Medium","risk_score":45}],"passwords_strength":[{"EasyToCrack":0,"PlainText":1,"StrongHash":1,"Unknown":0}]},
+ "PastesSummary":{"cnt":2,"domain":"pastebin.com","tmpstmp":"2019-01-01"},"ExposedPastes":null,"PasteMetrics":null}

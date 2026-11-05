@@ -10,9 +10,16 @@ from unlist.core.fetch import FetchResult
 
 
 def record_fetch(
-    conn: sqlite3.Connection, tool: str, result: FetchResult, note: str | None = None
+    conn: sqlite3.Connection,
+    tool: str,
+    result: FetchResult,
+    note: str | None = None,
+    body_override: bytes | None = None,
 ) -> int:
     """Store the response bytes (write-once, hashed) and a captures row, and return its id.
+
+    body_override stores a redacted copy instead of what came over the wire, for sources
+    that return leaked values the tool refuses to keep; the hash is of what is stored.
 
     kind is 'fetch' for a normal answer, 'refusal' when the site declined automated access
     (robots, 401, 403, 429, 451), 'error' when nothing came back.
@@ -25,8 +32,10 @@ def record_fetch(
         kind = "fetch"
     data_dir = paths.data_dir()
     ext = store.ext_for(result.content_type, result.final_url)
-    raw_abs = store.raw_path_for(tool, result.sha256, ext, result.captured_at, data_dir)
-    store.write_raw(raw_abs, result.body)
+    body = result.body if body_override is None else body_override
+    sha = result.sha256 if body_override is None else store.sha256_hex(body)
+    raw_abs = store.raw_path_for(tool, sha, ext, result.captured_at, data_dir)
+    store.write_raw(raw_abs, body)
     parts = [p for p in (note, result.reason, result.error) if p]
     row = store.CaptureRow(
         tool=tool,
@@ -34,7 +43,7 @@ def record_fetch(
         final_url=result.final_url,
         status=result.status,
         captured_at=result.captured_at,
-        sha256=result.sha256,
+        sha256=sha,
         raw_path=str(raw_abs.relative_to(data_dir)),
         kind=kind,
         headers_json=store.headers_to_json(result.headers),

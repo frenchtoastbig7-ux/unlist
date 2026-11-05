@@ -83,6 +83,79 @@ class HibpClient:
         except (ValueError, TypeError):
             return r, None
 
+    def subscription(self) -> tuple[FetchResult, dict | None]:
+        """What the key's plan allows: {'name': 'Core 1', 'rpm': 10, 'stealer_logs': False}."""
+        r = self.fetcher.get(
+            f"{API}/subscription/status", check_robots=False, headers=self._headers()
+        )
+        if not r.ok:
+            return r, None
+        try:
+            d = json.loads(r.body)
+        except (ValueError, TypeError):
+            return r, None
+        name = str(d.get("SubscriptionName") or "")
+        return r, {
+            "name": name,
+            "rpm": d.get("Rpm"),
+            "until": d.get("SubscribedUntil"),
+            "stealer_logs": bool(d.get("IncludesStealerLogs")) or name.lower().startswith("pro"),
+        }
+
+    def pastes(self, email: str) -> tuple[FetchResult, list[Breach] | None]:
+        """Pastes that contained the address. Each becomes a hit named '<Source>:<Id>'."""
+        r = self.fetcher.get(
+            f"{API}/pasteaccount/{quote(email, safe='')}",
+            check_robots=False,
+            headers=self._headers(),
+        )
+        if r.status == 404:
+            return r, []
+        if not r.ok:
+            return r, None
+        try:
+            items = json.loads(r.body)
+        except (ValueError, TypeError):
+            return r, None
+        out = []
+        for p in items:
+            source, pid = str(p.get("Source") or "paste"), str(p.get("Id") or "")
+            out.append(
+                Breach(
+                    name=f"{source}:{pid}",
+                    title=p.get("Title") or f"{source} paste",
+                    domain=source.lower(),
+                    breach_date=(p.get("Date") or "")[:10] or None,
+                    data_classes=["Email addresses"],
+                    pwn_count=p.get("EmailCount"),
+                )
+            )
+        return r, out
+
+    def stealer_logs(self, email: str) -> tuple[FetchResult, list[Breach] | None]:
+        """Websites whose saved credentials for this address were captured by infostealer
+        malware. Needs a Pro plan; returns domains only, never credentials."""
+        r = self.fetcher.get(
+            f"{API}/stealerlogsbyemail/{quote(email, safe='')}",
+            check_robots=False,
+            headers=self._headers(),
+        )
+        if r.status == 404:
+            return r, []
+        if not r.ok:
+            return r, None
+        try:
+            domains = json.loads(r.body)
+        except (ValueError, TypeError):
+            return r, None
+        return r, [
+            Breach(
+                name=str(d), title=f"Stealer log: {d}", domain=str(d), data_classes=["Passwords"]
+            )
+            for d in domains
+            if d
+        ]
+
     def pwned_password_count(self, password: str) -> tuple[FetchResult, int | None]:
         """k-anonymity: only the first five hex characters of the SHA-1 leave this machine."""
         digest = hashlib.sha1(password.encode("utf-8")).hexdigest().upper()

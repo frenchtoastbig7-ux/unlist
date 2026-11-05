@@ -376,10 +376,11 @@ def audit_tail(limit: int = 30) -> str:
 
 
 def scan_breaches(subject_id: str, sources: str = "") -> str:
-    """Look up every current email address of the subject in breach databases (HIBP with
-    a key, LeakCheck public, XposedOrNot; all return breach names, never leaked values).
-    sources: comma-separated subset of hibp, leakcheck, xposedornot. Takes a few seconds
-    per address because of rate limits. Needs consent on record."""
+    """Look up the subject's current emails, usernames and phones in breach sources.
+    Emails: HIBP breaches, pastes and stealer logs (as far as the key's plan allows),
+    LeakCheck, XposedOrNot analytics. Usernames: LeakCheck. Phones: LeakCheck Pro, only
+    with LEAKCHECK_API_KEY, values dropped and field names kept. sources: comma-separated
+    subset of hibp, leakcheck, xposedornot. Slow because of rate limits. Needs consent."""
     from unlist.scanners.breaches import scan_breaches as run_scan
     from unlist.scanners.breaches.run import SOURCES
 
@@ -392,10 +393,14 @@ def scan_breaches(subject_id: str, sources: str = "") -> str:
         res = run_scan(conn, subject_id, sources=chosen)
     except ConsentError as exc:
         return f"Refused: {exc}"
+    checked = f"{len(res.emails)} address(es), {len(res.usernames)} username(s), {len(res.phones)} phone(s)"
+    kinds = ", ".join(f"{v} {k}" for k, v in sorted(res.new_by_kind.items())) or "none"
     lines = [
-        f"Breach scan run {res.run_id} for `{subject_id}`: {len(res.emails)} address(es), "
-        f"**{res.new_hits} new** hit(s), {res.seen_hits} already known.",
+        f"Breach scan run {res.run_id} for `{subject_id}`: {checked}; "
+        f"**{res.new_hits} new** hit(s) ({kinds}), {res.seen_hits} already known.",
     ]
+    if res.plan:
+        lines.append(f"- HIBP plan: {res.plan.get('name')} ({res.plan.get('rpm')} requests a minute)")
     for src, why in res.skipped.items():
         lines.append(f"- skipped {src}: {why}")
     for err in res.errors:
@@ -415,9 +420,10 @@ def breaches_list(subject_id: str, since: str = "") -> str:
     if not rows:
         return "No breach hits recorded for this subject."
     return table(
-        ["breach", "date", "address", "data exposed", "source", "first seen"],
+        ["kind", "breach", "date", "identifier", "data exposed", "source", "first seen"],
         [
             [
+                r["kind"],
                 r["title"] or r["breach_name"],
                 r["breach_date"] or "",
                 r["identifier_value"],
