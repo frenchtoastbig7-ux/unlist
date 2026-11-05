@@ -86,9 +86,19 @@ def _name_in(text: str, first: str, last: str) -> bool:
 
 
 def extract_candidates(
-    body: bytes | str, page_url: str, profile: Profile, hosts: list[str]
+    body: bytes | str,
+    page_url: str,
+    profile: Profile,
+    hosts: list[str],
+    kind: str = "name",
 ) -> list[Candidate]:
-    """Anchors on the broker's own hosts whose text carries one of the subject's names."""
+    """Anchors on the broker's own hosts whose text carries one of the subject's names.
+
+    kind says how the page was reached. A page reached by searching the subject's own
+    phone or street that also shows their name is strong evidence, so those candidates
+    score higher; and because reverse-lookup pages often print the name as plain text,
+    the page itself becomes the candidate when no link carries it.
+    """
     raw = body.decode("utf-8", "replace") if isinstance(body, bytes) else body
     try:
         tree = lxml_html.fromstring(raw)
@@ -126,8 +136,39 @@ def extract_candidates(
         cand.places = sorted({f"{c}, {s}" for c, s in _PLACE.findall(block_text)})[:12]
         cand.phones = sorted({"1" + "".join(p) for p in _PHONE.findall(block_text)})[:6]
         cand.score, cand.reasons = score(cand, profile, matched[0].middle)
+        _kind_bonus(cand, kind)
         found[url] = cand
+    if not found and kind in ("phone", "address"):
+        text = _text(tree)
+        for n in profile.names:
+            if _name_in(text, n.first, n.last):
+                cand = Candidate(
+                    listing_url=page_url.split("#", 1)[0],
+                    name_text=f"{n.first} {n.last}",
+                    snippet=_around(text, n.last)[:400],
+                )
+                cand.places = sorted({f"{c}, {s}" for c, s in _PLACE.findall(cand.snippet)})[:12]
+                cand.score, cand.reasons = score(cand, profile, n.middle)
+                _kind_bonus(cand, kind)
+                found[cand.listing_url] = cand
+                break
     return sorted(found.values(), key=lambda c: -c.score)
+
+
+def _kind_bonus(cand: Candidate, kind: str) -> None:
+    if kind == "phone":
+        cand.score = min(1.0, round(cand.score + 0.3, 2))
+        cand.reasons.append("found by your phone number")
+    elif kind == "address":
+        cand.score = min(1.0, round(cand.score + 0.3, 2))
+        cand.reasons.append("found by your street address")
+
+
+def _around(text: str, needle: str, width: int = 200) -> str:
+    i = text.lower().find(needle.lower())
+    if i < 0:
+        return text[: 2 * width]
+    return text[max(0, i - width) : i + width]
 
 
 def score(cand: Candidate, profile: Profile, middle: str = "") -> tuple[float, list[str]]:

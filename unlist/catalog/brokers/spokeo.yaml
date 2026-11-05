@@ -12,6 +12,8 @@ search:
   method: url
   template: https://www.spokeo.com/search?q={first}%20{last}&g={city}%2C%20{state}
   fetch: browser
+  phone_template: https://www.spokeo.com/{phone_dashed}
+  notes: Phone pattern is the commonly documented one; the site blocked verification.
 opt_out:
   method: form
   url: https://www.spokeo.com/optout

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-from unlist.catalog.models import Broker
+from unlist.catalog.models import GENERATED_ORIGINS, Broker
 
 PACKAGE_DIR = Path(__file__).parent
 BROKERS_DIR = PACKAGE_DIR / "brokers"
@@ -55,6 +55,14 @@ def absorb(primary: Broker, registry_row: Broker) -> Broker:
     if not opt_out.email:
         # A curated privacy address beats the registry's named contact person.
         opt_out.email = primary.contact.privacy_email or registry_row.opt_out.email
+    if opt_out.method == "unknown" and primary.status == "active":
+        # A curated entry that only describes how to search inherits the way out.
+        r = registry_row.opt_out
+        if r.method != "unknown":
+            opt_out.method = r.method
+            opt_out.url = opt_out.url or r.url
+            opt_out.requires = opt_out.requires or list(r.requires)
+            opt_out.notes = opt_out.notes or r.notes
     update["opt_out"] = opt_out
     update["disclosures"] = sorted(set(primary.disclosures) | set(registry_row.disclosures))
     aka = list(primary.aka)
@@ -69,17 +77,80 @@ def absorb(primary: Broker, registry_row: Broker) -> Broker:
     return primary.model_copy(update=update)
 
 
+def merge_generated(base: Broker, extra: Broker) -> Broker:
+    """Two generated rows for the same company (same id or host) become one.
+
+    The state registry row is the base: it keeps its id, name, registry number and
+    postal address. The opt-out manual supplies what the registry lacks: a real opt-out
+    link and method, what the site demands, and a category.
+    """
+    if base.origin != "cppa-registry" and extra.origin == "cppa-registry":
+        base, extra = extra, base
+    update: dict = {}
+    if base.category == "other" and extra.category != "other":
+        update["category"] = extra.category
+    opt_out = base.opt_out.model_copy()
+    e = extra.opt_out
+    if e.method == "form" and e.url:
+        opt_out.method, opt_out.url = "form", e.url
+    elif opt_out.method == "unknown" and e.method != "unknown":
+        opt_out.method, opt_out.url = e.method, e.url
+    opt_out.email = opt_out.email or e.email
+    opt_out.requires = sorted(set(opt_out.requires) | set(e.requires))
+    opt_out.notes = " ".join(p for p in (opt_out.notes, e.notes) if p).strip()
+    update["opt_out"] = opt_out
+    contact = base.contact.model_copy()
+    for f in ("privacy_email", "privacy_url", "phone", "postal"):
+        if getattr(contact, f) is None and getattr(extra.contact, f):
+            setattr(contact, f, getattr(extra.contact, f))
+    update["contact"] = contact
+    aka = list(base.aka)
+    for name in (extra.name, *extra.aka):
+        if name and name != base.name and name not in aka:
+            aka.append(name)
+    update["aka"] = aka
+    update["hosts"] = base.hosts + [h for h in extra.hosts if h not in base.hosts]
+    update["sources"] = base.sources + [s for s in extra.sources if s not in base.sources]
+    update["disclosures"] = sorted(set(base.disclosures) | set(extra.disclosures))
+    return base.model_copy(update=update)
+
+
 class Catalog:
     def __init__(self, brokers: Iterable[Broker]) -> None:
         self._by_id: dict[str, Broker] = {}
+        host_index: dict[str, str] = {}  # host -> id, generated rows only
+
+        def index(b: Broker) -> None:
+            for h in b.hosts:
+                host_index[h] = b.id
+
+        def unindex(b: Broker) -> None:
+            for h in b.hosts:
+                if host_index.get(h) == b.id:
+                    del host_index[h]
+
         for b in brokers:
-            if b.origin != "cppa-registry":
-                for other in list(self._by_id.values()):
-                    if other.origin != "cppa-registry":
-                        continue
-                    if other.id == b.id or any(b.matches_host(h) for h in other.hosts):
-                        b = absorb(b, other)
-                        del self._by_id[other.id]
+            if b.origin in GENERATED_ORIGINS:
+                other_id = b.id if b.id in self._by_id else None
+                if other_id is None:
+                    other_id = next((host_index[h] for h in b.hosts if h in host_index), None)
+                other = self._by_id.get(other_id) if other_id else None
+                if other is not None and other.origin in GENERATED_ORIGINS:
+                    unindex(other)
+                    del self._by_id[other.id]
+                    b = merge_generated(other, b)
+                elif other is not None:
+                    continue  # an id already taken by a curated or operator entry
+                self._by_id[b.id] = b
+                index(b)
+                continue
+            for other in list(self._by_id.values()):
+                if other.origin not in GENERATED_ORIGINS:
+                    continue
+                if other.id == b.id or any(b.matches_host(h) for h in other.hosts):
+                    b = absorb(b, other)
+                    unindex(other)
+                    del self._by_id[other.id]
             self._by_id[b.id] = b  # later wins: registry < curated < operator
 
     def __len__(self) -> int:

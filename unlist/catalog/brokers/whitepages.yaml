@@ -10,6 +10,10 @@ search:
   method: url
   template: https://www.whitepages.com/name/{first}-{last}/{city}-{state}
   fetch: browser
+  phone_template: https://www.411.com/phone/{phone_1dashed}
+  notes: Reverse phone runs on the sister site 411.com; pattern read from its script on 2026-11-05.
+  verified:
+  - phone
 opt_out:
   method: form
   url: https://www.whitepages.com/suppression-requests

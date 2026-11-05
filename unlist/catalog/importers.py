@@ -237,3 +237,217 @@ def write_registry_yaml(brokers: list[Broker], path: Path, header: str = "") -> 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text((header.rstrip() + "\n" if header else "") + text, encoding="utf-8")
     return path
+
+
+# The opt-out manual (thumpersecure/opt-out-manual-2026, Unlicense) ------------------------
+
+MANUAL_URL = "https://github.com/thumpersecure/opt-out-manual-2026"
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_URL_RE = re.compile(r"https?://[^\s|)]+")
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_PAREN = re.compile(r"\(([^)]+)\)")
+_MANUAL_CATEGORY = {
+    "PUB": "people-search",
+    "B2B": "marketing",
+    "AD": "marketing",
+    "MKT": "marketing",
+    "FIN": "credit",
+    "HR": "background-check",
+    "ID": "background-check",
+}
+
+
+def _md_tables(text: str) -> list[tuple[list[str], list[list[str]]]]:
+    """Every pipe table in a Markdown document as (headers, rows of cells)."""
+    tables: list[tuple[list[str], list[list[str]]]] = []
+    headers: list[str] | None = None
+    rows: list[list[str]] = []
+    prev: list[str] | None = None
+    for line in text.splitlines():
+        if not line.lstrip().startswith("|"):
+            if headers is not None:
+                tables.append((headers, rows))
+            headers, rows, prev = None, [], None
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if all(re.fullmatch(r":?-+:?", c) for c in cells if c) and prev is not None:
+            headers, rows = prev, []
+            continue
+        if headers is not None:
+            rows.append(cells)
+        prev = cells
+    if headers is not None:
+        tables.append((headers, rows))
+    return tables
+
+
+def _site_name(cell: str) -> tuple[str, list[str], str | None]:
+    """'**Name** (alias or domain)' -> (name, aka, domain or None)."""
+    m = _BOLD.search(cell)
+    name = (m.group(1) if m else cell).strip()
+    aka: list[str] = []
+    domain = None
+    rest = cell[m.end() :] if m else ""
+    for inner in _PAREN.findall(rest):
+        inner = inner.strip()
+        if re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", inner.lower()):
+            domain = inner.lower()
+        elif inner:
+            aka.append(inner)
+    return name, aka, domain
+
+
+def _manual_method(method: str, link: str | None, email: str | None) -> tuple[str, list[str]]:
+    m = method.lower()
+    requires: list[str] = []
+    if "🪪" in method or " id" in m:
+        requires.append("id_upload")
+    if "phone code" in m or "📞" in method:
+        requires.append("phone_code")
+    if "no opt-out" in m:
+        return "unknown", requires
+    if "fax" in m or "📠" in method or "✉" in method or "mail-in" in m:
+        return "mail", ["mail_in", *requires]
+    starts_email = method.strip().startswith("📧") or m.startswith("email")
+    if starts_email and email:
+        return "email", requires
+    has_form = any(w in m for w in ("form", "online", "on-site", "one-click"))
+    if has_form and link:
+        if "📧" in method or "confirm" in m or "verify" in m:
+            requires.append("email_link")
+        return "form", requires
+    if email:
+        return "email", requires
+    return "unknown", requires
+
+
+def read_optout_manual(path: Path) -> list[dict[str, object]]:
+    """Rows from the three broker tables of The.Manual.md as plain dicts.
+
+    Table shapes (by header):
+      Site | Difficulty | Time | Needs Email? | Needs ID? | Opt-Out Link     (master index)
+      # | Site | Domain | Opt-Out Link | Method | Notes                      (additional sites)
+      # | Site | Website | Category | Opt-Out Method | Processing Time | Notes   (data brokers)
+    """
+    text = Path(path).read_text(encoding="utf-8")
+    out: list[dict[str, object]] = []
+    for headers, rows in _md_tables(text):
+        h = [x.lower() for x in headers]
+        if "site" not in h:
+            continue
+        idx = {name: i for i, name in enumerate(h)}
+
+        def cell(row: list[str], key: str, _idx: dict[str, int] = idx) -> str:
+            i = _idx.get(key)
+            return row[i].strip() if i is not None and i < len(row) else ""
+
+        if "opt-out link" in idx and "difficulty" in idx:
+            shape = "main"
+        elif "opt-out link" in idx and "method" in idx:
+            shape = "additional"
+        elif "opt-out method" in idx and "category" in idx:
+            shape = "broker"
+        else:
+            continue
+        for row in rows:
+            name, aka, domain = _site_name(cell(row, "site"))
+            if not name or name.lower() == "site":
+                continue
+            domain = (cell(row, "domain") or cell(row, "website") or domain or "").lower()
+            link_cell = cell(row, "opt-out link")
+            link_m = _URL_RE.search(link_cell)
+            link = link_m.group(0).rstrip(".,") if link_m else None
+            notes = cell(row, "notes")
+            if shape == "main":
+                method_text = "Online form" + (" + 📧" if "📧" in cell(row, "needs email?") else "")
+                if cell(row, "needs id?") not in ("", "—", "-"):
+                    method_text += " + 🪪 ID"
+                extra = f"{cell(row, 'difficulty')} · {cell(row, 'time')}".strip(" ·")
+                category = "people-search"
+            elif shape == "additional":
+                method_text = cell(row, "method")
+                extra = "" if link else link_cell
+                category = "people-search"
+            else:
+                method_text = cell(row, "opt-out method")
+                proc = cell(row, "processing time")
+                extra = f"Processing time: {proc}" if proc and proc.lower() != "varies" else ""
+                category = _MANUAL_CATEGORY.get(cell(row, "category").upper(), "other")
+            email_m = (
+                _EMAIL_RE.search(method_text)
+                or _EMAIL_RE.search(link_cell)
+                or _EMAIL_RE.search(notes)
+            )
+            email = email_m.group(0).lower().rstrip(".") if email_m else None
+            if not link and "📧" not in method_text.split("+")[0]:
+                note_url = _URL_RE.search(notes)
+                if note_url:
+                    link = note_url.group(0).rstrip(".,")
+            on_site = "on-site" in method_text.lower() or "embedded" in link_cell.lower()
+            if on_site and not link and domain:
+                # Removal is a control on the listing page itself.
+                link = f"https://{domain}"
+            method, requires = _manual_method(method_text, link, email)
+            if on_site and "listing_url" not in requires:
+                requires.append("listing_url")
+            out.append(
+                {
+                    "name": name,
+                    "aka": aka,
+                    "domain": domain,
+                    "link": link,
+                    "email": email,
+                    "method": method,
+                    "requires": requires,
+                    "category": category,
+                    "shape": shape,
+                    "method_text": method_text,
+                    "notes": " ".join(p for p in (notes, extra) if p).strip(),
+                }
+            )
+    return out
+
+
+def build_manual_registry(rows: Iterable[dict[str, object]]) -> list[Broker]:
+    seen: dict[str, int] = {}
+    hosts_seen: set[str] = set()
+    brokers: list[Broker] = []
+    for row in rows:
+        name = str(row["name"])
+        host = host_of(str(row["domain"])) if row["domain"] else None
+        if host and host in hosts_seen:
+            continue  # the same site listed in two tables: keep the first, more detailed row
+        if host:
+            hosts_seen.add(host)
+        slug = slugify(name)
+        n = seen.get(slug, 0)
+        seen[slug] = n + 1
+        if n:
+            slug = f"{slug}-{n + 1}"
+        link = _clean_url(str(row["link"])) if row["link"] else None
+        email = str(row["email"]) if row["email"] else None
+        method = str(row["method"])
+        site_url = f"https://{host}" if host else None
+        note = str(row["notes"])
+        if method == "unknown" and "form" in str(row["method_text"]).lower():
+            note = (note + " Opt-out is a web form reached from the site's privacy page.").strip()
+        brokers.append(
+            Broker(
+                id=slug,
+                name=name,
+                aka=list(row["aka"]),  # type: ignore[arg-type]
+                hosts=[host] if host else [],
+                category=str(row["category"]),  # type: ignore[arg-type]
+                contact={"privacy_email": email, "privacy_url": link or site_url},
+                opt_out={
+                    "method": method,
+                    "url": link if method in ("form", "account") else None,
+                    "email": email,
+                    "requires": list(row["requires"]),  # type: ignore[arg-type]
+                    "notes": note,
+                },
+                sources=[MANUAL_URL],
+                origin="optout-manual",
+            )
+        )
+    return brokers

@@ -158,3 +158,44 @@ def test_mcp_tools(conn, fixtures, data_dir, monkeypatch):
     assert "rejected" in tools.findings_reject(str(F.list_for(conn, "me")[1]["id"]), note="not me")
     shown = tools.findings_show(fid)
     assert "Oakland, CA" in shown and "reasons" in shown
+
+
+def test_phone_and_address_urls(conn):
+    from unlist.scanners.brokers.urls import build_address_urls, build_phone_urls, build_urls
+
+    s = subject(conn)
+    SubjectRepo(conn).add_identifier("me", Identifier(subject_id="me", kind="address", value="742 Evergreen Ter", meta={"city": "San Jose", "state": "CA", "zip": "95112"}))
+    p = Profile.from_subject(SubjectRepo(conn).get("me"), today=date(2026, 11, 4))
+    assert [a.street for a in p.addresses] == ["742 Evergreen Ter", "1 Main St"]  # current first
+    b = Broker(id="ps", name="PS", hosts=["ps.test"], category="people-search",
+               search={"method": "url", "phone_template": "https://ps.test/phone/{phone_1dashed}?n={phone}&a={area}",
+                       "address_template": "https://ps.test/address/{street_slug}_{city_slug}-{state_lower}?q={street}&z={zip}"})
+    assert build_phone_urls(b, p) == [("https://ps.test/phone/1-510-555-0100?n=5105550100&a=510", {"phone": "5105550100"})]
+    urls = [u for u, _ in build_address_urls(b, p)]
+    assert urls == [
+        "https://ps.test/address/742-evergreen-ter_san-jose-ca?q=742%20Evergreen%20Ter&z=95112",
+        "https://ps.test/address/1-main-st_berkeley-ca?q=1%20Main%20St&z=94704",
+    ]
+    assert [k for k, _, _ in build_urls(b, p)] == ["phone", "address", "address"]
+    assert build_urls(b, p, kinds=("name",)) == []
+    assert s.id == "me"
+
+
+def test_scan_by_phone_scores_plain_text_name(conn, data_dir):
+    subject(conn)
+    b = Broker(id="rev", name="Reverse", hosts=["rev.test"], category="people-search",
+               search={"method": "url", "phone_template": "https://rev.test/{phone}", "verified": ["phone"]},
+               opt_out={"method": "form", "url": "https://rev.test/optout"})
+    page = b"<html><body><h1>(510) 555-0100</h1><p>Owner: Jane Doe, Oakland, CA</p></body></html>"
+    routes = {"https://rev.test/robots.txt": httpx.Response(404), "https://rev.test/5105550100": html_response(page)}
+    res = scan_brokers(conn, "me", brokers=[b], fetcher=make_fetcher(routes), browser=None)
+    assert res.urls == 1 and res.new_candidates == 1
+    row = F.list_for(conn, "me")[0]
+    assert row["listing_url"] == "https://rev.test/5105550100" and row["score"] >= 0.7
+    kinds = [r["kind"] for r in conn.execute("SELECT kind FROM broker_checks")]
+    assert kinds == ["phone"]
+    # a page about the number that does not name the subject is not a finding
+    routes["https://rev.test/5105550100"] = html_response(b"<p>Owner: Someone Else</p>")
+    conn.execute("DELETE FROM findings")
+    res = scan_brokers(conn, "me", brokers=[b], fetcher=make_fetcher(routes), browser=None)
+    assert res.new_candidates == 0

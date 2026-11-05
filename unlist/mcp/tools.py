@@ -268,6 +268,8 @@ def catalog_list(category: str = "", searchable_only: bool = False, limit: int =
         brokers = [b for b in brokers if b.category == category]
     if searchable_only:
         brokers = [b for b in brokers if b.searchable]
+    # what the scanner can search first, then hand-curated entries, then the registries
+    brokers.sort(key=lambda b: (not b.searchable, b.origin != "curated", b.id))
     rows = [
         [
             b.id,

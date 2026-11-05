@@ -1,0 +1,16 @@
+id: usa-people-search
+name: USA People Search
+hosts:
+- usa-people-search.com
+category: people-search
+contact:
+  privacy_url: https://usa-people-search.com/
+search:
+  method: url
+  template: https://www.usa-people-search.com/names/{first}-{last}
+  fetch: browser
+  notes: Commonly documented URL pattern; the site blocked verification.
+opt_out:
+  method: unknown
+sources:
+- https://usa-people-search.com/

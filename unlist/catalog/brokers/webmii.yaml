@@ -1,0 +1,18 @@
+id: webmii
+name: WebMii
+hosts:
+- webmii.com
+category: people-search
+contact:
+  privacy_url: https://webmii.com/
+search:
+  method: url
+  template: https://webmii.com/people?n=%22{first}%20{last}%22
+  fetch: http
+  verified:
+  - name
+  notes: Aggregates public web results about a name. Pattern confirmed live on 2026-11-05.
+opt_out:
+  method: unknown
+sources:
+- https://webmii.com/

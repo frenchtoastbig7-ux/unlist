@@ -9,6 +9,8 @@ search:
   method: url
   template: https://thatsthem.com/name/{first}-{last}/{city}-{state}
   fetch: browser
+  phone_template: https://thatsthem.com/phone/{phone_dashed}
+  notes: Phone pattern is the commonly documented one; the site blocked verification.
 opt_out:
   method: form
   url: https://thatsthem.com/optout

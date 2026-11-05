@@ -1,0 +1,16 @@
+id: idcrawl
+name: IDCrawl
+hosts:
+- idcrawl.com
+category: people-search
+contact:
+  privacy_url: https://idcrawl.com/
+search:
+  method: url
+  template: https://www.idcrawl.com/{first}-{last}
+  fetch: browser
+  notes: Commonly documented URL pattern; the site blocked verification.
+opt_out:
+  method: unknown
+sources:
+- https://idcrawl.com/

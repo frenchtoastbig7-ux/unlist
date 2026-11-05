@@ -7,6 +7,12 @@ search:
   method: url
   template: https://www.fastpeoplesearch.com/name/{first}-{last}_{city}-{state}
   fetch: browser
+  phone_template: https://www.fastpeoplesearch.com/{phone_dashed}
+  address_template: https://www.fastpeoplesearch.com/address/{street_slug}_{city_slug}-{state_lower}
+  notes: Phone and address patterns read from the site's own script on 2026-11-05.
+  verified:
+  - address
+  - phone
 opt_out:
   method: form
   url: https://www.fastpeoplesearch.com/removal

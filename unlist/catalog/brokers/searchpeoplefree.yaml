@@ -7,6 +7,8 @@ search:
   method: url
   template: https://www.searchpeoplefree.com/find/{first}-{last}/{state}
   fetch: browser
+  phone_template: https://www.searchpeoplefree.com/phone-lookup/{phone_dashed}
+  notes: Phone pattern is the commonly documented one; the site blocked verification.
 opt_out:
   method: form
   url: https://www.searchpeoplefree.com/opt-out

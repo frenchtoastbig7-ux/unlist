@@ -14,12 +14,20 @@ OptOutMethod = Literal["form", "email", "account", "drop_only", "mail", "phone",
 Requirement = Literal["listing_url", "email_link", "phone_code", "id_upload", "account", "mail_in"]
 Captcha = Literal["unknown", "none", "recaptcha", "hcaptcha", "turnstile", "other"]
 FetchMode = Literal["http", "browser"]
-Origin = Literal["curated", "cppa-registry", "markup", "operator"]
+Origin = Literal["curated", "cppa-registry", "optout-manual", "markup", "operator"]
+SearchKind = Literal["name", "phone", "address"]
+GENERATED_ORIGINS = ("cppa-registry", "optout-manual")
 Status = Literal["active", "defunct", "seized", "merged"]
 
 SEARCH_PLACEHOLDERS = {"first", "last", "middle", "city", "state", "state_full", "zip", "age"}
+# phone: 10 digits; phone_dashed NNN-NNN-NNNN; phone_1dashed 1-NNN-NNN-NNNN; phone_e164 1NNNNNNNNNN
+PHONE_PLACEHOLDERS = {
+    "phone", "phone_dashed", "phone_1dashed", "phone_e164", "area", "prefix", "line",
+}  # fmt: skip
+# street as typed (percent-encoded); *_slug lowercase with hyphens
+ADDRESS_PLACEHOLDERS = {"street", "street_slug", "city", "city_slug", "state", "state_lower", "zip"}
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
-_PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
+_PLACEHOLDER = re.compile(r"\{([a-z0-9_]+)\}")
 
 
 class Contact(BaseModel):
@@ -30,24 +38,62 @@ class Contact(BaseModel):
 
 
 class Search(BaseModel):
+    """How to look someone up on the site: by name (template), by phone, by street address.
+
+    verified lists the kinds whose URL pattern was confirmed against the live site; the
+    rest are documented patterns the scanner still tries and labels as unverified.
+    """
+
     method: Literal["url", "none"] = "none"
     template: str | None = None
+    phone_template: str | None = None
+    address_template: str | None = None
     fetch: FetchMode = "http"
+    verified: list[SearchKind] = Field(default_factory=list)
     notes: str = ""
 
     @model_validator(mode="after")
     def _template_when_url(self) -> Search:
-        if self.method == "url":
-            if not self.template:
-                raise ValueError("search.method url needs a template")
-            bad = set(_PLACEHOLDER.findall(self.template)) - SEARCH_PLACEHOLDERS
+        if self.method == "url" and not (
+            self.template or self.phone_template or self.address_template
+        ):
+            raise ValueError("search.method url needs a template")
+        for kind, tpl, allowed in (
+            ("name", self.template, SEARCH_PLACEHOLDERS),
+            ("phone", self.phone_template, PHONE_PLACEHOLDERS),
+            ("address", self.address_template, ADDRESS_PLACEHOLDERS),
+        ):
+            if not tpl:
+                continue
+            bad = set(_PLACEHOLDER.findall(tpl)) - allowed
             if bad:
-                raise ValueError(f"unknown search placeholders {sorted(bad)}")
+                raise ValueError(f"unknown {kind} search placeholders {sorted(bad)}")
         return self
 
     @property
     def placeholders(self) -> set[str]:
         return set(_PLACEHOLDER.findall(self.template or ""))
+
+    @property
+    def kinds(self) -> list[str]:
+        if self.method != "url":
+            return []
+        return [
+            k
+            for k, t in (
+                ("name", self.template),
+                ("phone", self.phone_template),
+                ("address", self.address_template),
+            )
+            if t
+        ]
+
+    def template_for(self, kind: str) -> str | None:
+        return {
+            "name": self.template,
+            "phone": self.phone_template,
+            "address": self.address_template,
+        }.get(kind)
 
 
 class FormPlaybook(BaseModel):
@@ -130,7 +176,7 @@ class Broker(BaseModel):
 
     @property
     def searchable(self) -> bool:
-        return self.status == "active" and self.search.method == "url"
+        return self.status == "active" and bool(self.search.kinds)
 
     @property
     def opt_out_channel(self) -> str:

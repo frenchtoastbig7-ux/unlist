@@ -1,0 +1,19 @@
+id: anywho
+name: AnyWho
+hosts:
+- anywho.com
+category: people-search
+contact:
+  privacy_url: https://anywho.com/
+search:
+  method: url
+  phone_template: https://www.anywho.com/phone/{phone}
+  fetch: browser
+  verified:
+  - phone
+  notes: Phone pattern confirmed by a live response on 2026-11-05; listed as a Spokeo trading name in
+    the California registry.
+opt_out:
+  method: unknown
+sources:
+- https://anywho.com/

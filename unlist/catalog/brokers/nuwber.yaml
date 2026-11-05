@@ -7,6 +7,8 @@ search:
   method: url
   template: https://nuwber.com/search?name={first}%20{last}
   fetch: browser
+  phone_template: https://nuwber.com/phone/{phone}
+  notes: Phone pattern is the commonly documented one; the site blocked verification.
 opt_out:
   method: form
   url: https://nuwber.com/removal/link

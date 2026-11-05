@@ -1,0 +1,16 @@
+id: yellowpages-people
+name: Yellow Pages people search
+hosts:
+- people.yellowpages.com
+category: people-search
+contact:
+  privacy_url: https://people.yellowpages.com/
+search:
+  method: url
+  template: https://people.yellowpages.com/whitepages?first={first}&last={last}&zip={city}&state={state}
+  fetch: browser
+  notes: Commonly documented URL pattern; the site blocked verification.
+opt_out:
+  method: unknown
+sources:
+- https://people.yellowpages.com/

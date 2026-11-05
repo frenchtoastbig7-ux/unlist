@@ -7,6 +7,8 @@ search:
   method: url
   template: https://www.usphonebook.com/{first}-{last}
   fetch: browser
+  phone_template: https://www.usphonebook.com/{phone_dashed}
+  notes: Phone pattern is the commonly documented one; the site blocked verification.
 opt_out:
   method: form
   url: https://www.usphonebook.com/opt-out

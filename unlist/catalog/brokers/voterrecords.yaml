@@ -1,0 +1,16 @@
+id: voterrecords
+name: VoterRecords
+hosts:
+- voterrecords.com
+category: people-search
+contact:
+  privacy_url: https://voterrecords.com/
+search:
+  method: url
+  template: https://voterrecords.com/voters/{first}-{last}/1
+  fetch: browser
+  notes: Commonly documented URL pattern; the site blocked verification.
+opt_out:
+  method: unknown
+sources:
+- https://voterrecords.com/

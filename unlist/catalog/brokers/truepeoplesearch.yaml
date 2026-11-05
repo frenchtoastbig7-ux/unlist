@@ -9,6 +9,12 @@ search:
   method: url
   template: https://www.truepeoplesearch.com/results?name={first}%20{last}&citystatezip={city}%2C%20{state}
   fetch: browser
+  phone_template: https://www.truepeoplesearch.com/resultphone?phoneno={phone}
+  address_template: https://www.truepeoplesearch.com/resultaddress?streetaddress={street}&citystatezip={city}%2C%20{state}
+  notes: Phone and address patterns read from the site's search form and script on 2026-11-05.
+  verified:
+  - address
+  - phone
 opt_out:
   method: form
   url: https://www.truepeoplesearch.com/removal

@@ -20,7 +20,7 @@ from unlist.scanners.brokers.matcher import (
     looks_like_no_results,
     name_present,
 )
-from unlist.scanners.brokers.urls import Profile, build_search_urls
+from unlist.scanners.brokers.urls import Profile, build_urls
 from unlist.scanners.evidence import record_browser, record_fetch
 from unlist.subjects import SubjectRepo
 
@@ -119,8 +119,9 @@ def scan_brokers(
     fetcher: Fetcher | None = None,
     browser: BrowserSession | None = None,
     audit: AuditLog | None = None,
+    kinds: tuple[str, ...] = ("name", "phone", "address"),
 ) -> BrokerScanResult:
-    """Search every searchable broker (or the given ones) for the subject's names.
+    """Search every searchable broker (or the given ones) by name, phone and address.
 
     Consent is checked first. Pages are kept as evidence. Listings scoring at or above
     the threshold become candidate findings for the operator to confirm.
@@ -133,26 +134,33 @@ def scan_brokers(
     chosen = list(brokers) if brokers is not None else load_catalog().searchable()
     cur = conn.execute(
         "INSERT INTO scan_runs(subject_id, kind, started_at, params_json) VALUES (?,?,?,?)",
-        (subject_id, TOOL, now_iso(), json.dumps({"brokers": [b.id for b in chosen]})),
+        (
+            subject_id,
+            TOOL,
+            now_iso(),
+            json.dumps({"brokers": [b.id for b in chosen], "kinds": list(kinds)}),
+        ),
     )
     res = BrokerScanResult(run_id=int(cur.lastrowid), subject_id=subject_id)
     conn.commit()
     audit.append("scan.brokers.start", subject=subject_id, run_id=res.run_id, brokers=len(chosen))
     if not profile.names:
-        res.notes.append("subject has no name identifier; nothing to search")
+        res.notes.append("subject has no name identifier; listings cannot be tied to them")
     for broker in chosen:
-        urls = build_search_urls(broker, profile)
+        urls = build_urls(broker, profile, kinds)
         if not urls:
-            res.notes.append(f"{broker.id}: template needs values the subject lacks (place?)")
+            res.notes.append(f"{broker.id}: templates need values the subject lacks")
             continue
         res.brokers += 1
-        for url, _values in urls:
+        for kind, url, _values in urls:
             res.urls += 1
             body, final_url, cid, outcome, note = _page(fetcher, browser, conn, broker, url, res)
             n_cands = 0
+            if kind not in broker.search.verified:
+                note = "; ".join(p for p in (note, f"{kind} URL pattern unverified") if p)
             if body is not None:
                 text = body.decode("utf-8", "replace")
-                cands = extract_candidates(body, final_url, profile, broker.hosts)
+                cands = extract_candidates(body, final_url, profile, broker.hosts, kind)
                 if not cands and looks_like_no_results(text):
                     res.no_results += 1
                     outcome += ":none"
@@ -170,8 +178,12 @@ def scan_brokers(
                         res.seen += 1
             conn.execute(
                 """INSERT INTO broker_checks(run_id, subject_id, broker_id, search_url, outcome,
-                     capture_id, candidates, checked_at, note) VALUES (?,?,?,?,?,?,?,?,?)""",
-                (res.run_id, subject_id, broker.id, url, outcome, cid, n_cands, now_iso(), note),
+                     capture_id, candidates, checked_at, note, kind)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    res.run_id, subject_id, broker.id, url, outcome, cid, n_cands, now_iso(),
+                    note, kind,
+                ),
             )
             conn.commit()
     conn.execute(

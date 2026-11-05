@@ -1,16 +1,21 @@
 id: smartbackgroundchecks
 name: SmartBackgroundChecks
-hosts: [smartbackgroundchecks.com]
+hosts:
+- smartbackgroundchecks.com
 category: people-search
 search:
   method: url
-  template: "https://www.smartbackgroundchecks.com/people/{first}-{last}/{city}-{state}"
+  template: https://www.smartbackgroundchecks.com/people/{first}-{last}/{city}-{state}
   fetch: browser
+  phone_template: https://www.smartbackgroundchecks.com/phone/{phone_dashed}
+  notes: Phone pattern is the commonly documented one; the site blocked verification.
 opt_out:
   method: form
   url: https://www.smartbackgroundchecks.com/optout
-  requires: [listing_url, email_link]
+  requires:
+  - listing_url
+  - email_link
   captcha: unknown
 sources:
-  - https://www.smartbackgroundchecks.com/optout
-  - https://github.com/thumpersecure/opt-out-manual-2026
+- https://www.smartbackgroundchecks.com/optout
+- https://github.com/thumpersecure/opt-out-manual-2026

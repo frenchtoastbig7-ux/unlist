@@ -25,7 +25,7 @@ STATE_NAMES = {
     "PR": "Puerto Rico",
 }  # fmt: skip
 
-_PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
+_PLACEHOLDER = re.compile(r"\{([a-z0-9_]+)\}")
 
 
 @dataclass(frozen=True)
@@ -54,6 +54,18 @@ class Place:
         return STATE_NAMES.get(self.state.upper(), "")
 
 
+@dataclass(frozen=True)
+class Address:
+    street: str
+    city: str = ""
+    state: str = ""
+    zip: str = ""
+
+
+def slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
 @dataclass
 class Profile:
     """What the scanner searches for: names, places, age. Built from a subject."""
@@ -64,6 +76,8 @@ class Profile:
     phones: list[str] = field(default_factory=list)
     emails: list[str] = field(default_factory=list)
     relatives: list[str] = field(default_factory=list)
+    addresses: list[Address] = field(default_factory=list)
+    usernames: list[str] = field(default_factory=list)
 
     @classmethod
     def from_subject(cls, subject: Subject, today: date | None = None) -> Profile:
@@ -102,6 +116,17 @@ class Profile:
                 p.emails.append(ident.value)
             elif ident.kind == "relative":
                 p.relatives.append(ident.value)
+            elif ident.kind == "username":
+                p.usernames.append(ident.value)
+            if ident.kind == "address" and re.search(r"\d", ident.value):
+                p.addresses.append(
+                    Address(
+                        street=ident.value,
+                        city=str(ident.meta.get("city") or "").strip(),
+                        state=str(ident.meta.get("state") or "").strip().upper(),
+                        zip=str(ident.meta.get("zip") or "").strip(),
+                    )
+                )
         return p
 
 
@@ -153,4 +178,76 @@ def build_search_urls(broker: Broker, profile: Profile) -> list[tuple[str, dict[
             if url not in seen:
                 seen.add(url)
                 out.append((url, {k: values[k] for k in needed}))
+    return out
+
+
+def _fill(template: str, values: dict[str, str]) -> str | None:
+    needed = set(_PLACEHOLDER.findall(template))
+    if any(not values.get(k) for k in needed):
+        return None
+    url = template
+    for k in needed:
+        url = url.replace("{" + k + "}", values[k])
+    return url
+
+
+def build_phone_urls(broker: Broker, profile: Profile) -> list[tuple[str, dict[str, str]]]:
+    """Reverse-phone lookups for each of the subject's numbers (US 10-digit)."""
+    template = broker.search.phone_template
+    if not broker.searchable or not template:
+        return []
+    out: list[tuple[str, dict[str, str]]] = []
+    for number in profile.phones:
+        digits = number[-10:]
+        if len(digits) != 10:
+            continue
+        area, prefix, line = digits[:3], digits[3:6], digits[6:]
+        values = {
+            "phone": digits,
+            "phone_dashed": f"{area}-{prefix}-{line}",
+            "phone_1dashed": f"1-{area}-{prefix}-{line}",
+            "phone_e164": "1" + digits,
+            "area": area,
+            "prefix": prefix,
+            "line": line,
+        }
+        url = _fill(template, values)
+        if url and url not in {u for u, _ in out}:
+            out.append((url, {"phone": digits}))
+    return out
+
+
+def build_address_urls(broker: Broker, profile: Profile) -> list[tuple[str, dict[str, str]]]:
+    """Reverse-address lookups for each street address the subject recorded."""
+    template = broker.search.address_template
+    if not broker.searchable or not template:
+        return []
+    out: list[tuple[str, dict[str, str]]] = []
+    for a in profile.addresses:
+        values = {
+            "street": quote(a.street, safe=""),
+            "street_slug": slug(a.street),
+            "city": quote(a.city, safe=""),
+            "city_slug": slug(a.city),
+            "state": a.state,
+            "state_lower": a.state.lower(),
+            "zip": a.zip,
+        }
+        url = _fill(template, values)
+        if url and url not in {u for u, _ in out}:
+            out.append((url, {"street": a.street, "city": a.city, "state": a.state}))
+    return out
+
+
+def build_urls(
+    broker: Broker, profile: Profile, kinds: tuple[str, ...] = ("name", "phone", "address")
+) -> list[tuple[str, str, dict[str, str]]]:
+    """Every search URL for the broker across the requested kinds: (kind, url, values)."""
+    out: list[tuple[str, str, dict[str, str]]] = []
+    if "name" in kinds and broker.search.template:
+        out += [("name", u, v) for u, v in build_search_urls(broker, profile)]
+    if "phone" in kinds:
+        out += [("phone", u, v) for u, v in build_phone_urls(broker, profile)]
+    if "address" in kinds:
+        out += [("address", u, v) for u, v in build_address_urls(broker, profile)]
     return out
