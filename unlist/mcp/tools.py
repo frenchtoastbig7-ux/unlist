@@ -415,27 +415,50 @@ def scan_breaches(subject_id: str, sources: str = "") -> str:
 
 
 def breaches_list(subject_id: str, since: str = "") -> str:
-    """Breach hits recorded for a subject, newest breach first. since: ISO date to show
-    only hits first seen on or after it."""
-    from unlist.scanners.breaches.run import hits_for
+    """Breaches recorded for a subject, newest first, one row per incident with the hits
+    from every source grouped. Each row carries an id for breach_show and links to the
+    sources' own pages. since: ISO date to show only breaches first seen on or after it."""
+    from unlist.scanners.breaches import detail as D
 
-    rows = hits_for(_conn(), subject_id, since or None)
-    if not rows:
+    groups = D.groups_for(_conn(), subject_id, since or None)
+    if not groups:
         return "No breach hits recorded for this subject."
-    return table(
-        ["kind", "breach", "date", "identifier", "data exposed", "source", "first seen"],
-        [
+    return (
+        table(
+            ["id", "kind", "breach", "date", "identifiers", "data exposed", "sources", "links"],
             [
-                r["kind"],
-                r["title"] or r["breach_name"],
-                r["breach_date"] or "",
-                r["identifier_value"],
-                ", ".join(json.loads(r["data_classes_json"] or "[]"))[:100],
-                r["source"],
-                r["first_seen"][:10],
-            ]
-            for r in rows
-        ],
+                [
+                    g.id,
+                    g.kind,
+                    g.title,
+                    g.date,
+                    ", ".join(g.identifiers),
+                    D.exposed_summary(g, 110),
+                    ", ".join(g.source_labels),
+                    " ".join(f"[{link.label.split(':', 1)[0]}]({link.url})" for link in g.links[:2]),
+                ]
+                for g in groups
+            ],
+        )
+        + "\n\nUse breach_show with an id for the description, every source link, what was "
+        "exposed and what to do."
+    )
+
+
+def breach_show(hit_id: int) -> str:
+    """One breach in full: what happened, which of the subject's identifiers are in it,
+    the kinds of data it held according to each source, links to the breach's pages at
+    Have I Been Pwned and XposedOrNot and to the reports they cite, the account-deletion
+    link when one is known, and what to do. Sources report kinds of data, never values."""
+    from unlist.scanners.breaches import detail as D
+
+    found = D.group_for_hit(_conn(), int(hit_id))
+    if not found:
+        return f"No breach hit with id {hit_id}. Use breaches_list for ids."
+    hit, g = found
+    return (
+        D.group_markdown(g)
+        + f"\n\nIn the dashboard: /breaches/{g.id} (subject {hit['subject_id']})."
     )
 
 

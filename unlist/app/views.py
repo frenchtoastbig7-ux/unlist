@@ -20,12 +20,17 @@ from unlist.monitor.run import JOBS, jobs_status
 from unlist.reports.score import exposure_score, label_for, record_score, trend
 from unlist.requests import engine
 from unlist.scanners import exposures as X
+from unlist.scanners.breaches import detail as breach_detail
 from unlist.scanners.brokers import findings as F
 from unlist.subjects import Consent, ConsentError, Identifier, Subject, SubjectRepo
 
 router = APIRouter()
 TEMPLATES = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
-TEMPLATES.env.globals.update(version=__version__)
+_CSS = Path(__file__).parent / "static" / "style.css"
+# the stylesheet's address changes when the file does, so a browser never shows a stale one
+TEMPLATES.env.globals.update(
+    version=__version__, css_v=int(_CSS.stat().st_mtime) if _CSS.is_file() else 0
+)
 
 
 def conn() -> sqlite3.Connection:
@@ -156,10 +161,7 @@ def subject_show(request: Request, sid: str):
         s = SubjectRepo(c).get(sid)
     except KeyError:
         return PlainTextResponse("no such subject", status_code=404)
-    hits = c.execute(
-        "SELECT * FROM breach_hits WHERE subject_id=? ORDER BY COALESCE(breach_date,'') DESC",
-        (sid,),
-    ).fetchall()
+    breaches = breach_detail.groups_for(c, sid)
     findings = F.list_for(c, sid)
     requests_ = engine.list_for(c, sid)
     score, comps, _ = record_score(c, sid)
@@ -168,7 +170,9 @@ def subject_show(request: Request, sid: str):
         "subject.html",
         s=s,
         consent_state=_consent_state(s),
-        hits=hits,
+        breaches=breaches,
+        hit_count=sum(len(g.hit_ids) for g in breaches),
+        exposed=breach_detail.exposed_summary,
         findings=findings,
         requests=requests_,
         json=json,
@@ -435,6 +439,22 @@ def findings_verify(request: Request, ids: str = Form(...), use_browser: str = F
 
     jid = runner(request).submit("verify listings", job, {"ids": fids})
     return back(f"/jobs/{jid}")
+
+
+@router.get("/breaches/{hid}", response_class=HTMLResponse)
+def breach_show(request: Request, hid: int):
+    """One breach: what it held, which identifiers are in it, and links to the sources."""
+    c = conn()
+    found = breach_detail.group_for_hit(c, hid)
+    if not found:
+        return PlainTextResponse("no such breach hit", status_code=404)
+    hit, g = found
+    caps = {}
+    for e in g.evidence:
+        cap = c.execute("SELECT * FROM captures WHERE id=?", (e["capture_id"],)).fetchone()
+        if cap:
+            caps[e["capture_id"]] = cap
+    return render(request, "breach.html", g=g, subject_id=hit["subject_id"], caps=caps)
 
 
 @router.get("/evidence/{cid}/shot")

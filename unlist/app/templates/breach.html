@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}{{ g.title }} · unlist{% endblock %}
+{% block body %}
+<p class="muted"><a href="/subjects/{{ subject_id }}">← {{ subject_id }}</a></p>
+<h1>{{ g.title }} {% if g.kind != 'breach' %}<span class="tag">{{ g.kind }}</span>{% endif %}</h1>
+<p>{% if g.date %}<b>{{ g.date }}</b> · {% endif %}{% if g.domain %}{{ g.domain }} · {% endif %}reported by {{ g.source_labels|join(', ') }}
+ <span class="muted">· first seen by unlist {{ g.first_seen[:10] }}, last seen {{ g.last_seen[:10] }}</span></p>
+
+<div class="grid2">
+<div>
+<h2>What was exposed</h2>
+<table class="kv">
+<tr><th>Your identifiers in it</th><td>{{ g.identifiers|join(', ') }}</td></tr>
+{% for source, classes in g.classes_by_source %}
+<tr><th>Data in this breach<br><span class="muted">per {{ source }}</span></th><td>{% for c in classes %}<span class="tag">{{ c }}</span> {% endfor %}</td></tr>
+{% endfor %}
+{% for ident, fields in g.identifier_fields %}
+<tr><th>LeakCheck fields<br><span class="muted">for {{ ident }}</span></th><td>{% for f in fields %}<span class="tag">{{ f }}</span> {% endfor %}
+<div class="muted">LeakCheck lists these across all of its sources for this identifier. It does not say which breach held which field{% if g.classes %}, so the rows above are the better guide for this one{% endif %}.</div></td></tr>
+{% endfor %}
+{% if not g.classes_by_source and not g.identifier_fields %}<tr><th>Data</th><td class="muted">The source did not say what was exposed.</td></tr>{% endif %}
+{% for label, value in g.facts %}<tr><th>{{ label }}</th><td>{{ value }}</td></tr>{% endfor %}
+</table>
+<p class="muted">These sources report the kinds of data a breach held, not the values themselves, and unlist never stores leaked values.</p>
+</div>
+
+<div>
+<h2>Read it at the source</h2>
+{% if g.links or g.account %}
+<ul class="links">
+{% for link in g.links %}<li><a href="{{ link.url }}" target="_blank" rel="noreferrer noopener">{{ link.label }} ↗</a>{% if link.note %} <span class="muted">({{ link.note }})</span>{% endif %}<br><span class="muted small">{{ link.url|truncate(80) }}</span></li>{% endfor %}
+{% if g.account %}<li><a href="{{ g.account.url }}" target="_blank" rel="noreferrer noopener">Delete the {{ g.account.name }} account ↗</a> <span class="muted">(difficulty: {{ g.account.difficulty }}, from JustDeleteMe)</span>{% if g.account.notes %}<br><span class="muted small">{{ g.account.notes|truncate(160) }}</span>{% endif %}</li>{% endif %}
+</ul>
+{% else %}<p class="muted">No public page is known for this one. {% if 'LeakCheck' in g.source_labels %}LeakCheck names its sources but has no page per breach.{% endif %}</p>{% endif %}
+{% if 'LeakCheck' in g.source_labels and g.links %}<p class="muted">LeakCheck names its sources but has no page per breach; its stored answer is under Evidence.</p>{% endif %}
+</div>
+</div>
+
+{% if g.descriptions %}
+<h2>What happened</h2>
+{% for source, text in g.descriptions %}<blockquote>{{ text }}<footer class="muted">{{ source }}{% if source == 'Have I Been Pwned' %}, CC BY 4.0{% endif %}</footer></blockquote>{% endfor %}
+{% endif %}
+
+{% if g.advice %}
+<h2>What to do</h2>
+<ul>{% for a in g.advice %}<li>{{ a }}</li>{% endfor %}</ul>
+{% endif %}
+
+<h2>Evidence</h2>
+{% if g.evidence %}
+<p class="muted">The answer each source gave for your identifier, stored unchanged when it was fetched.</p>
+<table><tr><th>source</th><th>identifier</th><th>fetched</th><th>stored answer</th><th>sha256</th></tr>
+{% for e in g.evidence %}{% set cap = caps.get(e.capture_id) %}
+<tr><td>{{ e.source }}</td><td>{{ e.identifier }}</td><td>{{ cap.captured_at[:16] if cap else '' }}</td><td>{% if cap %}<a href="/evidence/{{ cap.id }}/raw" target="_blank">capture {{ cap.id }}</a>{% else %}<span class="muted">missing</span>{% endif %}</td><td class="muted">{{ cap.sha256[:16] if cap else '' }}…</td></tr>
+{% endfor %}</table>
+{% else %}<p class="muted">No stored answer is linked to this hit.</p>{% endif %}
+{% endblock %}

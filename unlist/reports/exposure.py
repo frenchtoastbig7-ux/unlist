@@ -30,6 +30,11 @@ def _is_sensitive(data_class: str) -> bool:
     return any(tok in c for tok in _SENSITIVE_TOKENS)
 
 
+def _short(label: str) -> str:
+    """'Have I Been Pwned: Adobe' -> 'Have I Been Pwned' for a table cell."""
+    return label.split(":", 1)[0].replace("|", "/")
+
+
 def _kind(row: sqlite3.Row) -> str:
     return row["kind"] if "kind" in row.keys() else "breach"  # noqa: SIM118
 
@@ -62,44 +67,29 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
     pastes = [h for h in all_hits if _kind(h) == "paste"]
     stealer = [h for h in all_hits if _kind(h) == "stealer"]
     counts["breach_hits"] = len(hits)
-    by_name: dict[str, dict] = {}
-    for h in hits:
-        d = by_name.setdefault(
-            h["breach_name"],
-            {
-                "date": h["breach_date"] or "",
-                "domain": h["domain"] or "",
-                "emails": set(),
-                "sources": set(),
-                "classes": set(),
-                "first_seen": h["first_seen"],
-            },
-        )
-        d["emails"].add(h["identifier_value"])
-        d["sources"].add(h["source"])
-        d["classes"].update(json.loads(h["data_classes_json"] or "[]"))
-        d["first_seen"] = min(d["first_seen"], h["first_seen"])
-    counts["breaches"] = len(by_name)
+    from unlist.scanners.breaches import detail as D
+
+    groups = D.build_groups(conn, hits)
+    counts["breaches"] = len(groups)
     parts.append("## Breaches\n")
-    if by_name:
+    if groups:
         parts.append(
             table(
-                ["breach", "date", "domain", "addresses", "data exposed", "sources", "first seen"],
+                ["breach", "date", "identifiers", "data exposed", "sources", "read at the source"],
                 [
                     [
-                        name,
-                        d["date"],
-                        d["domain"],
-                        ", ".join(sorted(d["emails"])),
-                        ", ".join(sorted(d["classes"]))[:120],
-                        ", ".join(sorted(d["sources"])),
-                        d["first_seen"][:10],
+                        g.title,
+                        g.date,
+                        ", ".join(g.identifiers),
+                        D.exposed_summary(g, 140),
+                        ", ".join(g.source_labels),
+                        " ".join(f"[{_short(link.label)}]({link.url})" for link in g.links[:3]),
                     ]
-                    for name, d in by_name.items()
+                    for g in groups
                 ],
             )
         )
-        sensitive = {c for d in by_name.values() for c in d["classes"] if _is_sensitive(c)}
+        sensitive = {c for g in groups for c in g.classes if _is_sensitive(c)}
         if sensitive:
             parts.append(
                 "\n**Act on these:** "
@@ -108,6 +98,19 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
                 "Change the password anywhere it was reused; consider a credit freeze if identity "
                 "data is listed."
             )
+        unscoped = sorted(
+            {f for g in groups if not g.classes for f in g.fields_any if _is_sensitive(f)}
+        )
+        if unscoped:
+            parts.append(
+                "\nLeakCheck also lists "
+                + ", ".join(unscoped)
+                + " for an identifier of yours without saying which of its sources held it."
+            )
+        parts.append("\n### Breach by breach\n")
+        for g in groups:
+            parts.append(D.group_markdown(g))
+            parts.append("")
     else:
         parts.append("No breach hits recorded. Run scan_breaches.")
 
@@ -130,9 +133,9 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
     if pastes or stealer:
         parts.append(
             table(
-                ["kind", "where", "date", "identifier", "first seen"],
+                ["kind", "where", "date", "identifier", "first seen", "link"],
                 [
-                    [_kind(h), h["title"] or h["breach_name"], h["breach_date"] or "", h["identifier_value"], h["first_seen"][:10]]
+                    [_kind(h), h["title"] or h["breach_name"], h["breach_date"] or "", h["identifier_value"], h["first_seen"][:10], D.paste_url(h["breach_name"]) if _kind(h) == "paste" else ""]
                     for h in (*stealer, *pastes)
                 ],
             )
