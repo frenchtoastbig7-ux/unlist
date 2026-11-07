@@ -137,6 +137,11 @@ def scan_usernames(
     conn.commit()
     if not names:
         res.notes.append("subject has no username identifier")
+        conn.execute(
+            "UPDATE scan_runs SET finished_at=?, counts_json=?, note=? WHERE id=?",
+            (now_iso(), json.dumps(res.counts), res.notes[-1], res.run_id),
+        )
+        conn.commit()
         return res
     audit.append(
         "scan.usernames.start", subject=subject_id, run_id=res.run_id, usernames=len(names)

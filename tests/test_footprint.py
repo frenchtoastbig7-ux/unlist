@@ -187,3 +187,17 @@ def test_footprint_mcp_tools(conn, fixtures, data_dir, monkeypatch):
     assert "BRAVE_API_KEY" in tools.scan_mentions("me")
     assert "exposure" in tools.mentions_confirm("me", "https://news.example/jane")
     assert "No exposures match" in tools.exposures_list("me", kind="domain")
+
+
+def test_username_scan_without_usernames_closes_its_run(conn, data_dir):
+    SubjectRepo(conn).add(
+        Subject(
+            id="nouser", label="No Usernames", residency_state="CA",
+            consent=Consent(holder="N", instrument="self-declaration: my own data", granted=date(2026, 1, 1), expires=date(2027, 1, 1)),
+            identifiers=[Identifier(subject_id="nouser", kind="email", value="n@example.com")],
+        )
+    )
+    res = scan_usernames(conn, "nouser", fetcher=make_fetcher({}))
+    assert res.sites == 0 and "no username" in res.notes[0]
+    run = conn.execute("SELECT * FROM scan_runs WHERE id=?", (res.run_id,)).fetchone()
+    assert run["finished_at"] and "no username" in run["note"]
