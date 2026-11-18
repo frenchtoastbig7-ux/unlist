@@ -1,0 +1,13 @@
+id: epsilon
+name: Epsilon
+hosts: [epsilon.com]
+category: marketing
+contact: {privacy_email: privacy@epsilon.com, privacy_url: https://www.epsilon.com/us/privacy-policy}
+opt_out:
+  method: email
+  email: privacy@epsilon.com
+  requires: []
+  captcha: unknown
+  notes: The former consumer-preference-center URL returned 404 on 2026-11-04; email is the documented route.
+sources:
+  - https://www.epsilon.com/privacy/consumer-preference-center

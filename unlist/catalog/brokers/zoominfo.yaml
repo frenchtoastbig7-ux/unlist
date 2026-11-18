@@ -1,0 +1,15 @@
+id: zoominfo
+name: ZoomInfo
+hosts: [zoominfo.com]
+category: marketing
+contact: {privacy_email: privacy@zoominfo.com, privacy_url: https://www.zoominfo.com/privacy-center}
+opt_out:
+  method: form
+  url: https://www.zoominfo.com/privacy-center/update/profile
+  email: privacy@zoominfo.com
+  requires: [email_link]
+  captcha: unknown
+  notes: Business-contact profiles (work email, title, employer). Email verification to the listed address.
+notes: The privacy-center URL now redirects to /trust-center/update/profile, a JavaScript app that returned 404 to a plain fetch on 2026-11-04; open it in the browser.
+sources:
+  - https://www.zoominfo.com/privacy-center

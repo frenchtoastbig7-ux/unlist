@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Jobs</h1>
+<table><tr><th>id</th><th>job</th><th>status</th><th>created</th><th>finished</th><th>result</th></tr>
+{% for j in jobs %}<tr><td><a href="/jobs/{{ j.id }}">{{ j.id }}</a></td><td>{{ j.name }}</td><td><span class="tag {{ j.status }}">{{ j.status }}</span></td><td>{{ j.created_at[:16] }}</td><td>{{ (j.finished_at or '')[:16] }}</td><td>{{ (j.result or '')|truncate(100) }}</td></tr>{% else %}<tr><td colspan="6" class="muted">no jobs yet</td></tr>{% endfor %}
+</table>
+{% endblock %}

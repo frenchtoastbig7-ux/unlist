@@ -1,0 +1,12 @@
+id: radaris
+name: Radaris
+hosts: [radaris.com]
+category: people-search
+status: seized
+opt_out:
+  method: unknown
+notes: >-
+  Domains transferred to Atlas Data Privacy under a New Jersey court order (August 2026).
+  Kept in the catalog so old listings are recognised; nothing to send.
+sources:
+  - https://krebsonsecurity.com/2026/09/data-broker-radaris-loses-domains-in-privacy-fight/

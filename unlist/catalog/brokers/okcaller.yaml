@@ -1,0 +1,19 @@
+id: okcaller
+name: OK Caller
+hosts:
+- okcaller.com
+category: people-search
+contact:
+  privacy_url: https://okcaller.com/
+search:
+  method: url
+  phone_template: https://okcaller.com/{phone}
+  fetch: browser
+  verified:
+  - phone
+  notes: Phone pattern confirmed by a live response on 2026-11-04; robots.txt disallows plain fetches,
+    so the browser is used.
+opt_out:
+  method: unknown
+sources:
+- https://okcaller.com/

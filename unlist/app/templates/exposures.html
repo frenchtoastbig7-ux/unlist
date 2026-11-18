@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Exposures</h1>
+<form method="get" action="/exposures" class="row">
+  <label>subject<select name="subject"><option value="">all</option>{% for s in subjects %}<option value="{{ s.id }}" {% if s.id == subject %}selected{% endif %}>{{ s.id }}</option>{% endfor %}</select></label>
+  <label>kind<select name="kind"><option value="">all</option>{% for k in kinds %}<option {% if k == kind %}selected{% endif %}>{{ k }}</option>{% endfor %}</select></label>
+  <label>status<select name="status"><option value="">all</option>{% for st in statuses %}<option {% if st == status %}selected{% endif %}>{{ st }}</option>{% endfor %}</select></label>
+  <button class="quiet">Filter</button>
+</form>
+<p class="muted">Accounts found under your usernames are candidates: the same handle is often someone else. Confirm the ones that are yours; they feed the clean-up list and the score. Username data from the WhatsMyName project (CC BY-SA 4.0).</p>
+<table>
+<tr><th>id</th><th>subject</th><th>kind</th><th>status</th><th>what</th><th>identifier</th><th>url</th><th>detail</th><th>last seen</th><th></th></tr>
+{% for r in rows %}
+<tr><td>{{ r.id }}</td><td>{{ r.subject_id }}</td><td>{{ r.kind }}</td><td><span class="tag {{ r.status }}">{{ r.status }}</span></td><td>{{ r.title or r.key }}</td><td>{{ r.identifier_value }}</td>
+<td>{% if r.url %}<a href="{{ r.url }}" target="_blank" rel="noreferrer">{{ r.url|truncate(50) }}</a>{% endif %}</td><td class="muted">{{ r.detail_json|truncate(70) }}</td><td>{{ r.last_seen[:10] }}</td>
+<td style="white-space:nowrap">{% for st, label, cls in (('confirmed', 'mine', ''), ('rejected', 'not me', 'quiet'), ('resolved', 'dealt with', 'quiet')) %}{% if r.status != st %}<form class="inline" method="post" action="/exposures/{{ r.id }}/status"><input type="hidden" name="status" value="{{ st }}"><input type="hidden" name="next" value="/exposures?subject={{ subject }}&kind={{ kind }}&status={{ status }}"><button class="small {{ cls }}">{{ label }}</button></form> {% endif %}{% endfor %}</td></tr>
+{% else %}<tr><td colspan="10" class="muted">No exposures match.</td></tr>{% endfor %}
+</table>
+{% endblock %}

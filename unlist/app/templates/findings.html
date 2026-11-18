@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Findings</h1>
+<form method="get" action="/findings" class="row">
+  <label>subject<select name="subject"><option value="">all</option>{% for s in subjects %}<option value="{{ s.id }}" {% if s.id == subject %}selected{% endif %}>{{ s.id }}</option>{% endfor %}</select></label>
+  <label>status<select name="status"><option value="">all</option>{% for st in statuses %}<option {% if st == status %}selected{% endif %}>{{ st }}</option>{% endfor %}</select></label>
+  <button class="quiet">Filter</button>
+</form>
+<p class="muted">A listing is a candidate until you confirm it: in independent tests roughly four in ten records returned by removal services belonged to someone else.</p>
+<table>
+<tr><th>id</th><th>subject</th><th>broker</th><th>status</th><th>score</th><th>name shown</th><th>age</th><th>places</th><th>listing</th><th>last seen</th><th></th></tr>
+{% for r, ex in rows %}
+<tr><td><a href="/findings/{{ r.id }}">{{ r.id }}</a></td><td>{{ r.subject_id }}</td><td>{{ r.broker_id }}</td><td><span class="tag {{ r.status }}">{{ r.status }}</span></td><td>{{ r.score }}</td><td>{{ ex.name_text }}</td><td>{{ ex.age or '' }}</td><td class="muted">{{ ex.places[:3]|join('; ') }}</td><td><a href="{{ r.listing_url }}" target="_blank" rel="noreferrer">{{ r.listing_url|truncate(50) }}</a></td><td>{{ r.last_seen[:10] }}</td>
+<td style="white-space:nowrap">{% if r.status in ('candidate', 'rejected') %}<form class="inline" method="post" action="/findings/{{ r.id }}/status"><input type="hidden" name="status" value="confirmed"><input type="hidden" name="next" value="/findings?subject={{ subject }}&status={{ status }}"><button class="small">mine</button></form>{% endif %}
+{% if r.status in ('candidate', 'confirmed') %}<form class="inline" method="post" action="/findings/{{ r.id }}/status"><input type="hidden" name="status" value="rejected"><input type="hidden" name="next" value="/findings?subject={{ subject }}&status={{ status }}"><button class="small quiet">not me</button></form>{% endif %}</td></tr>
+{% else %}<tr><td colspan="11" class="muted">No findings match.</td></tr>{% endfor %}
+</table>
+<form method="post" action="/findings/verify" class="row">
+  <label>verify finding ids<input name="ids" placeholder="12, 14"></label>
+  <label>browser<select name="use_browser"><option value="1">yes</option><option value="0">HTTP only</option></select></label>
+  <button class="quiet">Re-check listings</button>
+</form>
+{% endblock %}

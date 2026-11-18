@@ -1,0 +1,18 @@
+id: syncme
+name: Sync.me
+hosts:
+- sync.me
+category: other
+contact:
+  privacy_url: https://sync.me/
+search:
+  method: url
+  phone_template: https://sync.me/search/?number={phone_e164}
+  fetch: http
+  verified:
+  - phone
+  notes: Caller-ID directory built from uploaded address books. Pattern confirmed live on 2026-11-05.
+opt_out:
+  method: unknown
+sources:
+- https://sync.me/

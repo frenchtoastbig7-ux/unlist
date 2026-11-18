@@ -1,0 +1,13 @@
+id: dmachoice
+name: DMAchoice (ANA)
+hosts: [dmachoice.org]
+category: marketing
+opt_out:
+  method: account
+  url: https://www.dmachoice.org/
+  requires: [account]
+  captcha: unknown
+  notes: Mail-preference service; a small fee for ten years. Reduces catalogue and marketing mail.
+last_verified: 2026-11-04
+sources:
+  - https://www.dmachoice.org/

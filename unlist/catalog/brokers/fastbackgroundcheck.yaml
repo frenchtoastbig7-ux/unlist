@@ -1,0 +1,16 @@
+id: fastbackgroundcheck
+name: FastBackgroundCheck
+hosts:
+- fastbackgroundcheck.com
+category: people-search
+contact:
+  privacy_url: https://fastbackgroundcheck.com/
+search:
+  method: url
+  template: https://www.fastbackgroundcheck.com/people/{first}-{last}/{city}-{state}
+  fetch: browser
+  notes: Commonly documented URL pattern; the site blocked verification.
+opt_out:
+  method: unknown
+sources:
+- https://fastbackgroundcheck.com/

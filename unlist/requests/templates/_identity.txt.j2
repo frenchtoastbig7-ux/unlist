@@ -1,0 +1,22 @@
+The record(s) concern:
+
+  Name{{ 's' if names|length > 1 else '' }}: {{ names|join('; ') }}
+{%- if current_places %}
+  Current location: {{ current_places|join('; ') }}
+{%- endif %}
+{%- if past_places %}
+  Previous locations: {{ past_places|join('; ') }}
+{%- endif %}
+{%- if emails %}
+  Email address{{ 'es' if emails|length > 1 else '' }}: {{ emails|join('; ') }}
+{%- endif %}
+{%- if phones %}
+  Telephone number{{ 's' if phones|length > 1 else '' }}: {{ phones|join('; ') }}
+{%- endif %}
+{%- if listings %}
+
+The listing{{ 's' if listings|length > 1 else '' }} I am referring to:
+{% for url in listings %}
+  {{ url }}
+{%- endfor %}
+{%- endif %}

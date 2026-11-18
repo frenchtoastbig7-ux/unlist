@@ -1,0 +1,7 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>California DROP · {{ sid }}</h1>
+<pre>{{ text }}</pre>
+<p class="muted">Tracking: {{ status }}</p>
+<form method="post" action="/subjects/{{ sid }}/drop" class="row"><label>DROP ID (8 digits)<input name="drop_id" pattern="[0-9]{8}" required></label><button>Record</button></form>
+{% endblock %}
