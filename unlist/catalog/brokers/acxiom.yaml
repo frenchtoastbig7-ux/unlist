@@ -1,0 +1,15 @@
+id: acxiom
+name: Acxiom
+hosts: [acxiom.com]
+category: marketing
+contact: {privacy_email: consumeradvo@acxiom.com, privacy_url: https://www.acxiom.com/about-us/privacy/}
+opt_out:
+  method: form
+  url: https://isapps.acxiom.com/optout/optout.aspx
+  email: consumeradvo@acxiom.com
+  requires: [email_link]
+  captcha: unknown
+  notes: Marketing-data opt-out; no public listing to find, so request blind.
+last_verified: 2026-11-04
+sources:
+  - https://isapps.acxiom.com/optout/optout.aspx

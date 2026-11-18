@@ -1,0 +1,29 @@
+id: searchpeoplefree
+name: SearchPeopleFree
+hosts:
+- searchpeoplefree.com
+category: people-search
+search:
+  method: url
+  template: https://www.searchpeoplefree.com/find/{first}-{last}/{state}
+  fetch: browser
+  phone_template: https://www.searchpeoplefree.com/phone-lookup/{phone_dashed}
+  notes: Phone pattern is the commonly documented one; the site blocked verification.
+opt_out:
+  method: form
+  url: https://www.searchpeoplefree.com/opt-out
+  requires:
+  - email_link
+  captcha: recaptcha
+  form:
+    fields:
+      first: '#o_first'
+      last: '#o_last'
+      email: '#o_email'
+    stop_before: '#o_submit'
+    notes: 'Removal form at the bottom of the page: first, middle, last name, email, a terms checkbox,
+      then a CAPTCHA. Selectors read from the live page on 2026-11-04.'
+last_verified: '2026-11-04'
+sources:
+- https://www.searchpeoplefree.com/opt-out
+- https://github.com/thumpersecure/opt-out-manual-2026

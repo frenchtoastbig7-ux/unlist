@@ -1,0 +1,3 @@
+{"success":true,"found":2,"quota":398,"result":[
+ {"email":"jane@example.com","phone":"5105550100","password":"hunter2-SECRET","first_name":"Jane","source":{"name":"SomeShop","breach_date":"2021-06","unverified":0,"passwordless":0,"compilation":0},"fields":["email","phone","password","first_name"]},
+ {"phone":"5105550100","address":"1 Main St, Berkeley","source":{"name":"TelcoDump","breach_date":"2023-01"},"fields":["phone","address"]}]}

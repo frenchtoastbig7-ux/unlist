@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block head %}{% if j.status in ('queued', 'running') %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
+{% block body %}
+<h1>Job {{ j.id }}: {{ j.name }} <span class="tag {{ j.status }}">{{ j.status }}</span></h1>
+<p class="muted">created {{ j.created_at }}{% if j.started_at %} · started {{ j.started_at }}{% endif %}{% if j.finished_at %} · finished {{ j.finished_at }}{% endif %}{% if j.status in ('queued', 'running') %} · this page refreshes every 3 s{% endif %}</p>
+{% if j.result %}<p><b>{{ j.result }}</b></p>{% endif %}
+<pre>{{ j.log or '(no output yet)' }}</pre>
+<p><a href="/jobs">all jobs</a> · <a href="/findings?status=candidate">candidates</a> · <a href="/requests">requests</a></p>
+{% endblock %}

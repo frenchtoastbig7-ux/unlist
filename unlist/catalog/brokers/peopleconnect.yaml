@@ -1,0 +1,22 @@
+id: peopleconnect
+name: PeopleConnect (Intelius, TruthFinder, Instant Checkmate, US Search, ZabaSearch)
+aka: [Intelius, TruthFinder, Instant Checkmate, US Search, ZabaSearch, PeopleLookup]
+hosts: [intelius.com, truthfinder.com, instantcheckmate.com, ussearch.com, zabasearch.com, peoplelookup.com, peopleconnect.us]
+category: people-search
+contact: {privacy_email: privacy@peopleconnect.us, privacy_url: https://www.peopleconnect.us/privacy}
+search:
+  method: url
+  template: "https://www.zabasearch.com/people/{first}+{last}/{state}/"
+  fetch: browser
+opt_out:
+  method: account
+  url: https://suppression.peopleconnect.us/login
+  requires: [account, email_link]
+  captcha: unknown
+  notes: >-
+    One suppression account covers every PeopleConnect brand. You create the account with
+    an email address, verify it, then pick your record and suppress it.
+last_verified: 2026-11-04
+sources:
+  - https://suppression.peopleconnect.us/login
+  - https://github.com/yaelwrites/Big-Ass-Data-Broker-Opt-Out-List

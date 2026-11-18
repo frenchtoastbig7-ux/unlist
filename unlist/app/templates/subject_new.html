@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>New subject</h1>
+<form method="post" action="/subjects" class="row">
+  <label>id (slug)<input name="id" required placeholder="me"></label>
+  <label>label<input name="label" required placeholder="Jane Doe"></label>
+  <label>kind<select name="kind"><option value="self">self</option><option value="household">household</option></select></label>
+  <label>US state<input name="residency_state" maxlength="2" placeholder="CA"></label>
+  <label>country<input name="residency_country" value="US" maxlength="2"></label>
+  <label>consent holder<input name="holder" placeholder="Jane Doe"></label>
+  <label>consent instrument<input name="instrument" placeholder="self-declaration: my own data"></label>
+  <label>consent expires<input name="expires" type="date"></label>
+  <button>Create</button>
+</form>
+<p class="muted">For yourself the instrument is a self-declaration. For a household member record what they agreed to; everything for them stops when the consent expires.</p>
+{% endblock %}

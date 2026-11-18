@@ -1,0 +1,12 @@
+id: dataveria
+name: Dataveria
+hosts:
+- dataveria.com
+category: people-search
+status: seized
+opt_out:
+  method: unknown
+notes: The domain shows 'This Domain Has Been Transferred by Court Order' as of 2026-11-05. Kept so old
+  listings are recognised.
+sources:
+- https://dataveria.com/

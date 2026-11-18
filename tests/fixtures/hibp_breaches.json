@@ -1,0 +1,5 @@
+[
+ {"Name":"Adobe","Title":"Adobe","Domain":"adobe.com","BreachDate":"2013-10-04","AddedDate":"2013-12-04T00:00:00Z","PwnCount":152445165,"DataClasses":["Email addresses","Password hints","Passwords","Usernames"],"IsVerified":true,"IsSensitive":false},
+ {"Name":"LinkedIn","Title":"LinkedIn","Domain":"linkedin.com","BreachDate":"2012-05-05","AddedDate":"2016-05-21T21:35:40Z","PwnCount":164611595,"DataClasses":["Email addresses","Passwords"],"IsVerified":true,"IsSensitive":false},
+ {"Name":"Collection1","Title":"Collection #1","Domain":"","BreachDate":"2019-01-07","AddedDate":"2019-01-16T21:46:07Z","PwnCount":772904991,"DataClasses":["Email addresses","Passwords"],"IsVerified":false,"IsSensitive":false}
+]

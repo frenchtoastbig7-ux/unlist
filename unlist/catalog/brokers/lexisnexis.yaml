@@ -1,0 +1,17 @@
+id: lexisnexis
+name: LexisNexis Risk Solutions
+hosts: [lexisnexis.com, risk.lexisnexis.com]
+category: background-check
+contact: {privacy_url: https://consumer.risk.lexisnexis.com/opt}
+opt_out:
+  method: form
+  url: https://consumer.risk.lexisnexis.com/opt
+  requires: [id_upload]
+  captcha: unknown
+  notes: >-
+    Opt-out is limited to specific circumstances (identity theft, law enforcement, risk of
+    harm) and asks for supporting documents. Never upload ID through the tool; do it yourself.
+legal: {ccpa: true}
+last_verified: 2026-11-04
+sources:
+  - https://optout.lexisnexis.com/

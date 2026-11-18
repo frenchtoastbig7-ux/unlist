@@ -1,0 +1,16 @@
+id: privateeye
+name: PrivateEye
+hosts:
+- privateeye.com
+category: people-search
+contact:
+  privacy_url: https://privateeye.com/
+search:
+  method: url
+  template: https://privateeye.com/find-people?firstName={first}&lastName={last}
+  fetch: browser
+  notes: Pattern taken from the site's own redirect on 2026-11-05; results render in the browser.
+opt_out:
+  method: unknown
+sources:
+- https://privateeye.com/

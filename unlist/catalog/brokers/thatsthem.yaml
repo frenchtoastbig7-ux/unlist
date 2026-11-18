@@ -1,0 +1,25 @@
+id: thatsthem
+name: ThatsThem
+aka:
+- Spokeo property
+hosts:
+- thatsthem.com
+category: people-search
+search:
+  method: url
+  template: https://thatsthem.com/name/{first}-{last}/{city}-{state}
+  fetch: browser
+  phone_template: https://thatsthem.com/phone/{phone_dashed}
+  notes: Phone pattern is the commonly documented one; the site blocked verification.
+opt_out:
+  method: form
+  url: https://thatsthem.com/optout
+  requires:
+  - listing_url
+  captcha: turnstile
+notes: Listed as a Spokeo trading name in the California registry; its own opt-out page still applies.
+  Cloudflare challenge before the page loads (seen 2026-11-04); a normal browser profile usually passes
+  it, the tool waits for you.
+sources:
+- https://thatsthem.com/optout
+- https://github.com/thumpersecure/opt-out-manual-2026

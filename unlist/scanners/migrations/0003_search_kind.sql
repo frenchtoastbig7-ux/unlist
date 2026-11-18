@@ -1,0 +1,1 @@
+ALTER TABLE broker_checks ADD COLUMN kind TEXT NOT NULL DEFAULT 'name';

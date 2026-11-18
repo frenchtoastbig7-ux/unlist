@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>Inbox</h1>
+{% if configured %}<form method="post" action="/inbox/poll"><button>Poll the opt-out mailbox</button></form>{% else %}<p class="msg">No mailbox configured. Set UNLIST_IMAP_HOST and the SMTP user and password in .env (a mailbox created for opt-outs, never your main account).</p>{% endif %}
+<table><tr><th>received</th><th>from</th><th>subject</th><th>class</th><th>request</th><th>action</th></tr>
+{% for m in rows %}<tr><td>{{ (m.received_at or m.seen_at)[:16] }}</td><td>{{ m.from_addr }}</td><td>{{ m.subject }}</td><td>{{ m.classification }}</td><td>{% if m.request_id %}<a href="/requests/{{ m.request_id }}">{{ m.request_id }}</a>{% endif %}</td><td>{{ m.action }}</td></tr>{% else %}<tr><td colspan="6" class="muted">no messages processed yet</td></tr>{% endfor %}
+</table>
+{% endblock %}
