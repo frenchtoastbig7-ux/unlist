@@ -44,17 +44,17 @@ def upsert(
              capture_id, now, now),
         )  # fmt: skip
         return int(cur.lastrowid), "new"
-    how = "seen"
-    new_status = row["status"]
-    if row["status"] == "resolved":
-        new_status, how = status, "reopened"
+    # The status is decided in the database, from the row as it is now: the dashboard may
+    # have changed it on another connection since the SELECT above. Only a resolved row is
+    # reopened; any other status, such as a rejection, is the operator's and is kept.
     conn.execute(
-        "UPDATE exposures SET last_seen=?, detail_json=?, status=?, "
+        "UPDATE exposures SET last_seen=?, detail_json=?, "
+        "status=CASE WHEN status='resolved' THEN ? ELSE status END, "
         "capture_id=COALESCE(?, capture_id), title=COALESCE(?, title), url=COALESCE(?, url) "
         "WHERE id=?",
-        (now, detail_json, new_status, capture_id, title, url, row["id"]),
+        (now, detail_json, status, capture_id, title, url, row["id"]),
     )
-    return int(row["id"]), how
+    return int(row["id"]), "reopened" if row["status"] == "resolved" else "seen"
 
 
 def get(conn: sqlite3.Connection, exposure_id: int) -> sqlite3.Row:

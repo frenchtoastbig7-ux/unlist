@@ -2,7 +2,8 @@ from pathlib import Path
 
 import httpx
 
-from unlist.core.fetch import RateLimiter
+from unlist import USER_AGENT
+from unlist.core.fetch import Fetcher, RateLimiter
 from unlist.core.testing import FakeSleep, html_response, make_fetcher
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -59,6 +60,16 @@ def test_user_agent_names_the_project():
         seen["ua"] = request.headers.get("user-agent")
         return html_response(b"<p>ok</p>")
 
-    f = make_fetcher({"https://site.test/page": page})
+    routes = {"https://site.test/page": page, "https://site.test/robots.txt": page}
+    # make_fetcher supplies a bare client, so the header has to come from Fetcher itself
+    f = make_fetcher(routes)
     f.get("https://site.test/page")
-    assert seen["ua"] is None or "unlist" in seen["ua"] or "python-httpx" in seen["ua"]
+    assert seen["ua"] == USER_AGENT and seen["ua"].startswith("unlist/")
+    seen.clear()
+    f.post("https://site.test/page", data={"a": "b"})
+    assert seen["ua"] == USER_AGENT
+    # the production client (no injected client) carries it too
+    prod = Fetcher(sleep=lambda s: None)
+    assert prod.client.headers["user-agent"] == USER_AGENT
+    assert prod.client.follow_redirects is False
+    prod.client.close()

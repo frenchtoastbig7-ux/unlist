@@ -28,6 +28,31 @@ PHONE_PLACEHOLDERS = {
 ADDRESS_PLACEHOLDERS = {"street", "street_slug", "city", "city_slug", "state", "state_lower", "zip"}
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _PLACEHOLDER = re.compile(r"\{([a-z0-9_]+)\}")
+# Validation looks at anything in braces, so {FIRST} or {first-name} is rejected rather
+# than passing unnoticed and reaching a broker's site unfilled.
+_ANY_PLACEHOLDER = re.compile(r"\{([^{}]*)\}")
+_NON_SLUG = re.compile(r"[^a-z0-9]+")
+_CORP = re.compile(
+    r"\b(inc|llc|l\.l\.c|ltd|limited|corp|corporation|co|company|plc|gmbh|lp|llp|holdings)\b\.?",
+    re.IGNORECASE,
+)
+
+
+def name_slug(name: str) -> str:
+    """The id a company name generates: lowercase, corporate suffixes dropped, hyphenated."""
+    base = _CORP.sub(" ", name.lower())
+    slug = _NON_SLUG.sub("-", base).strip("-")
+    return slug[:60].rstrip("-") or "broker"
+
+
+def normalise_host(value: str) -> str:
+    """A bare hostname from a host, host:port or URL: lowercase, no port, path or www."""
+    h = value.strip().lower()
+    try:
+        host = urlsplit(h if "://" in h else "//" + h).hostname or ""
+    except ValueError:
+        return ""
+    return host.removeprefix("www.").rstrip(".")
 
 
 class Contact(BaseModel):
@@ -65,7 +90,7 @@ class Search(BaseModel):
         ):
             if not tpl:
                 continue
-            bad = set(_PLACEHOLDER.findall(tpl)) - allowed
+            bad = set(_ANY_PLACEHOLDER.findall(tpl)) - allowed
             if bad:
                 raise ValueError(f"unknown {kind} search placeholders {sorted(bad)}")
         return self
@@ -157,7 +182,7 @@ class Broker(BaseModel):
     @field_validator("id")
     @classmethod
     def _slug(cls, v: str) -> str:
-        if not _SLUG.match(v):
+        if not _SLUG.fullmatch(v):
             raise ValueError("id must be a slug: lowercase letters, digits, hyphens")
         return v
 
@@ -166,10 +191,7 @@ class Broker(BaseModel):
     def _hosts(cls, v: list[str]) -> list[str]:
         out = []
         for h in v:
-            h = h.strip().lower()
-            if "://" in h:
-                h = urlsplit(h).netloc
-            h = h.removeprefix("www.").rstrip("/")
+            h = normalise_host(h)
             if h and h not in out:
                 out.append(h)
         return out
@@ -193,5 +215,5 @@ class Broker(BaseModel):
         return m
 
     def matches_host(self, host: str) -> bool:
-        host = host.lower().removeprefix("www.")
-        return any(host == h or host.endswith("." + h) for h in self.hosts)
+        host = normalise_host(host)
+        return bool(host) and any(host == h or host.endswith("." + h) for h in self.hosts)

@@ -28,8 +28,8 @@
 <h2>Read it at the source</h2>
 {% if g.links or g.account %}
 <ul class="links">
-{% for link in g.links %}<li><a href="{{ link.url }}" target="_blank" rel="noreferrer noopener">{{ link.label }} ↗</a>{% if link.note %} <span class="muted">({{ link.note }})</span>{% endif %}<br><span class="muted small">{{ link.url|truncate(80) }}</span></li>{% endfor %}
-{% if g.account %}<li><a href="{{ g.account.url }}" target="_blank" rel="noreferrer noopener">Delete the {{ g.account.name }} account ↗</a> <span class="muted">(difficulty: {{ g.account.difficulty }}, from JustDeleteMe)</span>{% if g.account.notes %}<br><span class="muted small">{{ g.account.notes|truncate(160) }}</span>{% endif %}</li>{% endif %}
+{% for link in g.links %}<li>{% if link.url|http_url %}<a href="{{ link.url|http_url }}" target="_blank" rel="noreferrer noopener">{{ link.label }} ↗</a>{% else %}{{ link.label }}{% endif %}{% if link.note %} <span class="muted">({{ link.note }})</span>{% endif %}<br><span class="muted small">{{ link.url|truncate(80) }}</span></li>{% endfor %}
+{% if g.account %}<li>{% if g.account.url|http_url %}<a href="{{ g.account.url|http_url }}" target="_blank" rel="noreferrer noopener">Delete the {{ g.account.name }} account ↗</a>{% else %}Delete the {{ g.account.name }} account{% endif %} <span class="muted">(difficulty: {{ g.account.difficulty }}, from JustDeleteMe)</span>{% if g.account.notes %}<br><span class="muted small">{{ g.account.notes|truncate(160) }}</span>{% endif %}</li>{% endif %}
 </ul>
 {% else %}<p class="muted">No public page is known for this one. {% if 'LeakCheck' in g.source_labels %}LeakCheck names its sources but has no page per breach.{% endif %}</p>{% endif %}
 {% if 'LeakCheck' in g.source_labels and g.links %}<p class="muted">LeakCheck names its sources but has no page per breach; its stored answer is under Evidence.</p>{% endif %}

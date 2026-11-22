@@ -8,6 +8,7 @@ queued or running is marked abandoned.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import queue
 import sqlite3
@@ -83,25 +84,60 @@ class JobRunner:
                 job_id, fn = self._queue.get(timeout=0.5)
             except queue.Empty:
                 continue
-            conn = self.connect()
-            conn.execute(
-                "UPDATE app_jobs SET status='running', started_at=? WHERE id=?",
-                (now_iso(), job_id),
-            )
-            conn.commit()
-            ctx = JobContext(job_id=job_id, conn=conn)
             try:
-                result = fn(ctx) or ""
+                self._run_one(job_id, fn)
+            except Exception:
+                # A locked or unreachable database must not end the only worker: later
+                # jobs would queue forever. The job itself is never run a second time.
+                traceback.print_exc()
+
+    def _run_one(self, job_id: int, fn: JobFn) -> None:
+        try:
+            conn = self.connect()
+        except Exception:
+            self._finish(job_id, "failed", traceback.format_exc()[-2000:])
+            raise
+        try:
+            try:
+                conn.execute(
+                    "UPDATE app_jobs SET status='running', started_at=? WHERE id=?",
+                    (now_iso(), job_id),
+                )
+                conn.commit()
+            except Exception:
+                # not started, so nothing external has happened yet
+                self._finish(job_id, "failed", traceback.format_exc()[-2000:])
+                raise
+            try:
+                result = fn(JobContext(job_id=job_id, conn=conn)) or ""
                 status = "done"
             except Exception:
                 result = traceback.format_exc()[-2000:]
                 status = "failed"
-            conn.execute(
-                "UPDATE app_jobs SET status=?, finished_at=?, result=? WHERE id=?",
-                (status, now_iso(), result, job_id),
-            )
-            conn.commit()
-            conn.close()
+            try:
+                conn.execute(
+                    "UPDATE app_jobs SET status=?, finished_at=?, result=? WHERE id=?",
+                    (status, now_iso(), result, job_id),
+                )
+                conn.commit()
+            except Exception:
+                self._finish(job_id, status, result)
+        finally:
+            with contextlib.suppress(Exception):
+                conn.close()
+
+    def _finish(self, job_id: int, status: str, result: str) -> None:
+        """Record a job's end on a fresh connection; best effort, never raises."""
+        with contextlib.suppress(Exception):
+            conn = self.connect()
+            try:
+                conn.execute(
+                    "UPDATE app_jobs SET status=?, finished_at=?, result=? WHERE id=?",
+                    (status, now_iso(), result, job_id),
+                )
+                conn.commit()
+            finally:
+                conn.close()
 
     @staticmethod
     def get(conn: sqlite3.Connection, job_id: int) -> sqlite3.Row | None:

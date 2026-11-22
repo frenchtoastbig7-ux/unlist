@@ -1,7 +1,7 @@
 {% if agent %}
-I am submitting this request as the authorised agent of the person named above, who has given me written permission to act for them{% if agent_instrument %} ({{ agent_instrument }}){% endif %}. A copy of that permission is available on request.
+I am submitting this request as the authorised agent of the person named above, who has given me written permission to act for them. A copy of that permission is available on request.
 {% endif %}
-Please confirm in writing, to this address, when the request has been carried out. Verification by reply to this email address is sufficient; do not ask for government-issued identification, a photograph, or any information beyond what is in this message.
+{% if reply_email %}Please confirm in writing, to {{ reply_email }}, when the request has been carried out. If you need to verify this request, a reply to that email address should be enough{% else %}Please confirm in writing when the request has been carried out. If you need to verify this request, please use a method proportionate to it{% endif %}; please do not ask for government-issued identification, a photograph, or more information than is needed to verify it.
 
 Please keep this reference in any reply: [{{ tag }}]
 

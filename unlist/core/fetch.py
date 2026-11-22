@@ -1,4 +1,4 @@
-"""Rate-limited HTTP GET with retries, redirect tracking, raw capture, hashing, robots.txt.
+"""Rate-limited HTTP GET/POST with retries, hop-by-hop redirects, raw capture, robots.txt.
 
 Design notes
 - One Fetcher per process. It keeps a per-host clock and a robots.txt cache.
@@ -9,6 +9,10 @@ Design notes
   and an error string, so a refusal can still be recorded as evidence.
 - robots.txt is honoured for plain HTTP fetches. A disallow produces a
   FetchResult with refused=True and no request is made.
+- Redirects are followed one hop at a time so each hop gets the robots check and
+  its host's rate limit, and caller-supplied credentials never leave the origin
+  they were meant for. A malformed URL or a redirect loop is a failed fetch
+  (status None), not an exception.
 """
 
 from __future__ import annotations
@@ -29,6 +33,12 @@ from unlist.core.timeutil import iso_z, utcnow
 DEFAULT_INTERVAL = 2.0
 DEFAULT_TIMEOUT = 30.0
 RETRY_STATUSES = {500, 502, 503, 504, 429}
+REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+MAX_REDIRECTS = 10
+# Request headers that may follow a redirect to another origin. Anything else a caller
+# adds (X-API-Key, hibp-api-key, X-Subscription-Token, Authorization) stays behind.
+_FORWARDABLE_HEADERS = {"accept", "accept-language", "user-agent", "content-type"}
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 @dataclass
@@ -95,6 +105,30 @@ class RateLimiter:
         return slept
 
 
+@dataclass
+class _Attempt:
+    """One pass over a redirect chain: a final response, a robots refusal, or a failure."""
+
+    final_url: str
+    captured_at: str
+    resp: httpx.Response | None = None
+    history: list[tuple[int, str]] = field(default_factory=list)
+    refused: bool = False
+    error: str | None = None
+    reason: str | None = None
+    retryable: bool = False
+
+
+def _origin(url: str) -> tuple[str, str | None, int | None]:
+    parts = urlsplit(url)
+    scheme = parts.scheme.lower()
+    return scheme, parts.hostname, parts.port or _DEFAULT_PORTS.get(scheme)
+
+
+def _has_header(headers: dict[str, str], name: str) -> bool:
+    return any(k.lower() == name for k in headers)
+
+
 class Fetcher:
     def __init__(
         self,
@@ -110,8 +144,9 @@ class Fetcher:
     ) -> None:
         self.user_agent = user_agent
         self._now = now
+        # Redirects are followed here, hop by hop (see _attempt), never by httpx.
         self.client = client or httpx.Client(
-            follow_redirects=True,
+            follow_redirects=False,
             timeout=timeout,
             headers={"User-Agent": user_agent, "Accept": "*/*"},
         )
@@ -129,10 +164,8 @@ class Fetcher:
         if origin in self._robots:
             return self._robots[origin]
         rp = urllib.robotparser.RobotFileParser()
-        try:
-            self.limiter.wait(parts.netloc)
-            resp = self.client.get(f"{origin}/robots.txt", headers={"User-Agent": self.user_agent})
-        except httpx.HTTPError:
+        resp = self._attempt("GET", f"{origin}/robots.txt", check_robots=False).resp
+        if resp is None:
             self._robots[origin] = None
             return None
         if resp.status_code >= 400:
@@ -165,77 +198,7 @@ class Fetcher:
     ) -> FetchResult:
         """GET url. retries overrides the instance default for this call (0 disables)."""
         max_retries = self.retries if retries is None else retries
-        captured_at = iso_z(self._now())
-        if check_robots and not self.robots_allows(url):
-            return FetchResult(
-                requested_url=url,
-                final_url=url,
-                status=None,
-                headers=[],
-                body=b"",
-                sha256=sha256_hex(b""),
-                captured_at=captured_at,
-                refused=True,
-                reason="robots.txt disallows automated fetch of this URL",
-            )
-        host = urlsplit(url).netloc
-        attempt = 0
-        last_error: str | None = None
-        while True:
-            self.limiter.wait(host)
-            captured_at = iso_z(self._now())
-            try:
-                resp = self.client.get(url, headers=headers or {})
-            except httpx.HTTPError as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-                resp = None
-            if resp is not None and resp.status_code not in RETRY_STATUSES:
-                body = resp.content
-                return FetchResult(
-                    requested_url=url,
-                    final_url=str(resp.url),
-                    status=resp.status_code,
-                    headers=list(resp.headers.multi_items()),
-                    body=body,
-                    sha256=sha256_hex(body),
-                    captured_at=captured_at,
-                    history=[(r.status_code, str(r.url)) for r in resp.history],
-                    reason=_reason_for(resp.status_code),
-                )
-            if resp is not None:
-                last_error = f"HTTP {resp.status_code}"
-                last_resp = resp
-            else:
-                last_resp = None
-            if attempt >= max_retries:
-                break
-            attempt += 1
-            self._sleep(self.backoff * attempt)
-        if last_resp is not None:
-            body = last_resp.content
-            return FetchResult(
-                requested_url=url,
-                final_url=str(last_resp.url),
-                status=last_resp.status_code,
-                headers=list(last_resp.headers.multi_items()),
-                body=body,
-                sha256=sha256_hex(body),
-                captured_at=captured_at,
-                history=[(r.status_code, str(r.url)) for r in last_resp.history],
-                reason=_reason_for(last_resp.status_code),
-                error=last_error,
-            )
-        return FetchResult(
-            requested_url=url,
-            final_url=url,
-            status=None,
-            headers=[],
-            body=b"",
-            sha256=sha256_hex(b""),
-            captured_at=captured_at,
-            error=last_error,
-            reason="network error after retries",
-        )
+        return self._fetch("GET", url, max_retries, check_robots=check_robots, headers=headers)
 
     def post(
         self,
@@ -252,60 +215,147 @@ class Fetcher:
         status None and an error on network failure. robots.txt is not consulted
         (POST targets are APIs) and retries are off unless asked for.
         """
-        host = urlsplit(url).netloc
+        return self._fetch(
+            "POST", url, retries, check_robots=False, headers=headers, data=data, content=content
+        )
+
+    def _fetch(self, method: str, url: str, max_retries: int, **kwargs) -> FetchResult:
         attempt = 0
-        last_error: str | None = None
-        last_resp: httpx.Response | None = None
-        captured_at = iso_z(self._now())
         while True:
-            self.limiter.wait(host)
-            captured_at = iso_z(self._now())
-            try:
-                resp = self.client.post(url, data=data, content=content, headers=headers or {})
-            except httpx.HTTPError as exc:
-                last_error = f"{type(exc).__name__}: {exc}"
-                resp = None
-            if resp is not None and resp.status_code not in RETRY_STATUSES:
-                return self._result(url, resp, captured_at)
-            if resp is not None:
-                last_error = f"HTTP {resp.status_code}"
-                last_resp = resp
-            else:
-                last_resp = None
-            if attempt >= retries:
+            a = self._attempt(method, url, **kwargs)
+            if a.resp is not None and a.resp.status_code not in RETRY_STATUSES:
+                return self._result(url, a)
+            if not a.retryable and a.resp is None:
+                return self._result(url, a)
+            if attempt >= max_retries:
                 break
             attempt += 1
             self._sleep(self.backoff * attempt)
-        if last_resp is not None:
-            return self._result(url, last_resp, captured_at, error=last_error)
-        return FetchResult(
-            requested_url=url,
-            final_url=url,
-            status=None,
-            headers=[],
-            body=b"",
-            sha256=sha256_hex(b""),
-            captured_at=captured_at,
-            error=last_error,
-            reason="network error after retries",
+        if a.resp is not None:
+            a.error = f"HTTP {a.resp.status_code}"
+        else:
+            a.reason = "network error after retries"
+        return self._result(url, a)
+
+    def _attempt(
+        self,
+        method: str,
+        url: str,
+        *,
+        check_robots: bool,
+        headers: dict | None = None,
+        data: dict[str, str] | None = None,
+        content: bytes | None = None,
+    ) -> _Attempt:
+        """Send one request and follow its redirects by hand.
+
+        Every hop waits for its own host's rate limit and, for a GET with check_robots,
+        is checked against that host's robots.txt. Headers the caller added (API keys)
+        go only to the origin the caller named: the first hop to another origin, or
+        from https to http, drops everything outside _FORWARDABLE_HEADERS for the rest
+        of the chain. A body is never re-sent to another origin.
+        """
+        hop_headers = {str(k): str(v) for k, v in (headers or {}).items()}
+        if not _has_header(hop_headers, "user-agent"):
+            hop_headers["User-Agent"] = self.user_agent
+        history: list[tuple[int, str]] = []
+        captured_at = iso_z(self._now())
+        current = url
+        try:
+            first_origin = _origin(url)
+            for _ in range(MAX_REDIRECTS + 1):
+                parts = urlsplit(current)
+                if method == "GET" and check_robots and not self.robots_allows(current):
+                    reason = "robots.txt disallows automated fetch of this URL"
+                    if history:
+                        reason = "robots.txt disallows automated fetch of the redirect target"
+                    return _Attempt(
+                        current, captured_at, history=history, refused=True, reason=reason
+                    )
+                self.limiter.wait(parts.netloc)
+                captured_at = iso_z(self._now())
+                request = self.client.build_request(
+                    method, current, headers=hop_headers, data=data, content=content
+                )
+                resp = self.client.send(request, follow_redirects=False)
+                location = resp.headers.get("location")
+                if resp.status_code not in REDIRECT_STATUSES or not location:
+                    return _Attempt(str(resp.url), captured_at, resp=resp, history=history)
+                target = str(resp.url.join(location))
+                has_body = data is not None or content is not None
+                cross_origin = _origin(target) != first_origin
+                keeps_method = resp.status_code in (307, 308) or method != "POST"
+                if has_body and keeps_method and cross_origin:
+                    # Hand the 3xx back rather than repeat the body somewhere else.
+                    return _Attempt(str(resp.url), captured_at, resp=resp, history=history)
+                history.append((resp.status_code, str(resp.url)))
+                if not keeps_method:
+                    method, data, content = "GET", None, None
+                    hop_headers = {
+                        k: v for k, v in hop_headers.items() if k.lower() != "content-type"
+                    }
+                # A scheme change is already a different origin; https to http is the
+                # case that must never carry a key, so it is spelled out.
+                downgrade = first_origin[0] == "https" and _origin(target)[0] != "https"
+                if cross_origin or downgrade:
+                    hop_headers = {
+                        k: v for k, v in hop_headers.items() if k.lower() in _FORWARDABLE_HEADERS
+                    }
+                current = target
+        except (ValueError, httpx.InvalidURL) as exc:
+            # urlsplit and httpx both refuse some strings outright; that is a failed
+            # fetch like any other, not a reason to take down the caller's whole run.
+            return _Attempt(
+                current,
+                captured_at,
+                history=history,
+                error=f"{type(exc).__name__}: {exc}",
+                reason="malformed URL",
+            )
+        except httpx.HTTPError as exc:
+            return _Attempt(
+                current,
+                captured_at,
+                history=history,
+                error=f"{type(exc).__name__}: {exc}",
+                retryable=True,
+            )
+        return _Attempt(
+            current,
+            captured_at,
+            history=history,
+            error=f"more than {MAX_REDIRECTS} redirects",
+            reason="redirect limit reached",
         )
 
     @staticmethod
-    def _result(
-        url: str, resp: httpx.Response, captured_at: str, error: str | None = None
-    ) -> FetchResult:
-        body = resp.content
+    def _result(url: str, a: _Attempt) -> FetchResult:
+        if a.resp is None:
+            return FetchResult(
+                requested_url=url,
+                final_url=a.final_url if a.refused else url,
+                status=None,
+                headers=[],
+                body=b"",
+                sha256=sha256_hex(b""),
+                captured_at=a.captured_at,
+                refused=a.refused,
+                reason=a.reason,
+                error=a.error,
+                history=a.history,
+            )
+        body = a.resp.content
         return FetchResult(
             requested_url=url,
-            final_url=str(resp.url),
-            status=resp.status_code,
-            headers=list(resp.headers.multi_items()),
+            final_url=a.final_url,
+            status=a.resp.status_code,
+            headers=list(a.resp.headers.multi_items()),
             body=body,
             sha256=sha256_hex(body),
-            captured_at=captured_at,
-            history=[(r.status_code, str(r.url)) for r in resp.history],
-            reason=_reason_for(resp.status_code),
-            error=error,
+            captured_at=a.captured_at,
+            history=a.history,
+            reason=_reason_for(a.resp.status_code),
+            error=a.error,
         )
 
 

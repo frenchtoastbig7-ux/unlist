@@ -106,7 +106,9 @@ def extract(
     """Extract main text and detect language from an HTML (or plain text) document."""
     raw = _decode(data, content_type) if isinstance(data, bytes) else data
     ct = (content_type or "").lower()
-    if ct.startswith("text/plain") or not re.search(r"<\s*(html|body|div|p|article)\b", raw, re.I):
+    declared_html = ct.startswith(("text/html", "application/xhtml"))
+    looks_html = re.search(r"<\s*(html|body|div|p|article)\b", raw, re.I)
+    if ct.startswith("text/plain") or not (declared_html or looks_html):
         text = normalise_whitespace(raw)
         return Extracted(text=text, lang=detect_lang(text), title=None, method="plain")
 

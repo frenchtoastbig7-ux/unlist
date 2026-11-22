@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from urllib.parse import quote, urlsplit
@@ -30,6 +31,30 @@ TOOL = "mentions"
 
 def make_fetcher() -> Fetcher:
     return Fetcher(limiter=RateLimiter(default_interval=1.1), retries=1)
+
+
+_HOSTNAME = re.compile(r"^(?!-)[a-z0-9-]{1,63}(?<!-)(\.(?!-)[a-z0-9-]{1,63}(?<!-))*$")
+
+
+def web_host(url: str) -> str:
+    """Host of an absolute http(s) URL without a leading www, or '' for anything else.
+
+    A mention's URL becomes a link on the dashboard, so `javascript:`, scheme-relative
+    and malformed addresses are not accepted.
+    """
+    if not isinstance(url, str) or url != url.strip() or any(c.isspace() for c in url):
+        return ""
+    try:
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        _ = parts.port  # raises for a port that is not a number
+    except ValueError:
+        return ""
+    if parts.scheme not in ("http", "https") or not host:
+        return ""
+    if not (_HOSTNAME.match(host.rstrip(".")) or ":" in host):  # a name, an IPv4 or an IPv6
+        return ""
+    return host.removeprefix("www.")
 
 
 @dataclass
@@ -105,16 +130,23 @@ def scan_mentions(
             res.errors.append(f"{q}: {r.reason or r.error or f'HTTP {r.status}'}")
             continue
         try:
-            items = (json.loads(r.body).get("web") or {}).get("results") or []
+            d = json.loads(r.body)
         except ValueError:
+            d = None
+        # a missing or null section is "no results"; any other shape is not an answer
+        web = d.get("web", {}) if isinstance(d, dict) else None
+        web = {} if web is None and isinstance(d, dict) else web
+        items = web.get("results") if isinstance(web, dict) else 0
+        items = [] if items is None else items
+        if not isinstance(items, list):
             res.errors.append(f"{q}: unreadable answer")
             continue
         for it in items:
-            link = str(it.get("url") or "")
-            if not link or link in seen_urls:
-                continue
+            link = it.get("url") if isinstance(it, dict) else None
+            host = web_host(link) if link else ""
+            if not host or link in seen_urls:
+                continue  # one unusable result does not cost the others
             seen_urls.add(link)
-            host = urlsplit(link).netloc.lower().removeprefix("www.")
             broker = catalog.by_host(host)
             res.mentions.append(
                 Mention(
@@ -146,9 +178,9 @@ def confirm_mention(
 ) -> tuple[int, int | None]:
     """Record a URL as a page about the subject. Returns (exposure id, finding id or None)."""
     SubjectRepo(conn).require(subject_id)
-    host = urlsplit(url).netloc.lower().removeprefix("www.")
+    host = web_host(url)
     if not host:
-        raise ValueError("not a URL")
+        raise ValueError("not an absolute http(s) URL")
     broker = load_catalog().by_host(host)
     eid, _ = X.upsert(
         conn, subject_id, host, "mention", "operator", url,

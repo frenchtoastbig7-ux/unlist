@@ -52,9 +52,12 @@ uv run playwright install chromium
 ## The dashboard
 
 ```bash
-uv sync --extra extract --extra app
+uv sync --extra extract --extra browser --extra app
 uv run unlist app
 ```
+
+`uv sync` installs exactly the extras named and removes the rest, so name every one you
+use each time (leave out `--extra browser` if you skipped Playwright above).
 
 opens http://127.0.0.1:8787/ (localhost only, never a network port): subjects and
 identifiers, scans as background jobs with a live log, candidate listings with their
@@ -158,7 +161,7 @@ Intervals are changed with `monitor_set_interval`. Each run writes a report unde
 ## Development
 
 ```bash
-uv sync --extra extract --extra dev
+uv sync --extra extract --extra app --extra dev
 uv run ruff check .
 uv run pytest -q
 uv run unlist catalog validate

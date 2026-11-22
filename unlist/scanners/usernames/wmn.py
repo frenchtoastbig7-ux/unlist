@@ -7,6 +7,7 @@ import sqlite3
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import quote
 
 from unlist import paths
 from unlist.core.audit import AuditLog
@@ -38,17 +39,39 @@ def load_sites(
     """The dataset's site list, from the local cache when it is fresh enough."""
     p = cache_path()
     now = now if now is not None else time.time()
+    sites = None
+    why: object = None
     if not p.is_file() or now - p.stat().st_mtime > max_age:
         r = fetcher.get(DATA_URL, check_robots=False)
-        if r.ok:
+        sites = _parse_sites(r.body) if r.ok else None
+        if sites is not None:
+            # checked before it replaces the cache, and swapped in whole: a bad download
+            # must not cost the last usable copy
             p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_bytes(r.body)
-            paths.make_private(p)
-        elif not p.is_file():
-            why = r.reason or r.error or r.status
-            raise RuntimeError(f"could not download the WhatsMyName data: {why}")
-    data = json.loads(p.read_text(encoding="utf-8"))
-    return [s for s in data.get("sites", []) if s.get("valid", True) is not False]
+            tmp = p.with_suffix(p.suffix + ".part")
+            tmp.write_bytes(r.body)
+            paths.make_private(tmp)
+            tmp.replace(p)
+        else:
+            why = (r.reason or r.error or r.status) if not r.ok else "the download is not valid"
+    if sites is None and p.is_file():
+        sites = _parse_sites(p.read_bytes())
+        why = why or "the cached copy is not valid"
+    if sites is None:
+        raise RuntimeError(f"could not load the WhatsMyName data: {why or 'no cached copy'}")
+    return [s for s in sites if s.get("valid", True) is not False]
+
+
+def _parse_sites(body: bytes) -> list[dict] | None:
+    """The site rules of a dataset file, or None when it is not a usable dataset."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return None
+    sites = data.get("sites") if isinstance(data, dict) else None
+    if not isinstance(sites, list) or not sites:
+        return None
+    return [s for s in sites if isinstance(s, dict)]
 
 
 def usable(site: dict, include_nsfw: bool = False) -> bool:
@@ -57,8 +80,17 @@ def usable(site: dict, include_nsfw: bool = False) -> bool:
     if not include_nsfw and str(site.get("cat", "")) in NSFW_CATEGORIES:
         return False
     return bool(site.get("uri_check")) and "{account}" in (
-        site["uri_check"] + str(site.get("post_body") or "")
+        str(site["uri_check"]) + str(site.get("post_body") or "")
     )
+
+
+def _in_body(template: str, account: str) -> str:
+    """The post body with the username escaped for the body's own format."""
+    try:
+        json.loads(template)
+    except ValueError:
+        return template.replace("{account}", quote(account, safe=""))  # a form body
+    return template.replace("{account}", json.dumps(account, ensure_ascii=False)[1:-1])
 
 
 def check_site(fetcher: Fetcher, site: dict, username: str) -> tuple[str, FetchResult, str]:
@@ -66,14 +98,17 @@ def check_site(fetcher: Fetcher, site: dict, username: str) -> tuple[str, FetchR
     account = username
     for ch in str(site.get("strip_bad_char") or ""):
         account = account.replace(ch, "")
-    url = site["uri_check"].replace("{account}", account)
+    # Percent-encoded so a "/" or "?" in a username cannot change which resource is asked
+    # for; the verdict has to be about this account.
+    in_url = quote(account, safe="")
+    url = str(site["uri_check"]).replace("{account}", in_url)
     headers = dict(site.get("headers") or {})
     if site.get("post_body"):
-        body = str(site["post_body"]).replace("{account}", account).encode("utf-8")
+        body = _in_body(str(site["post_body"]), account).encode("utf-8")
         r = fetcher.post(url, content=body, headers=headers)
     else:
         r = fetcher.get(url, check_robots=False, headers=headers, retries=0)
-    pretty = str(site.get("uri_pretty") or site["uri_check"]).replace("{account}", account)
+    pretty = str(site.get("uri_pretty") or site["uri_check"]).replace("{account}", in_url)
     if r.status is None:
         return "unknown", r, pretty
     text = r.body.decode("utf-8", "replace")
@@ -126,6 +161,8 @@ def scan_usernames(
     the dataset's categories (social, coding, gaming, ...).
     """
     subject = SubjectRepo(conn).require(subject_id)
+    if limit is not None and limit < 0:
+        raise ValueError("limit must be zero or more, or None for every site")
     names = [i.value for i in subject.of_kind("username") if i.current]
     fetcher = fetcher or make_fetcher()
     audit = audit or AuditLog()
@@ -151,18 +188,27 @@ def scan_usernames(
     if categories:
         sites = [s for s in sites if str(s.get("cat")) in categories]
     res.skipped_sites = len(all_sites) - len(sites)
-    if limit:
-        sites = sites[:limit]
+    if limit is not None:
+        sites = sites[:limit]  # zero means no site is asked about the username
     res.sites = len(sites)
+    broken = 0
     for username in names:
         for site in sites:
-            verdict, r, pretty = check_site(fetcher, site, username)
+            try:
+                verdict, r, pretty = check_site(fetcher, site, username)
+            except Exception:
+                # one rule the scanner cannot use (a malformed URL, a wrong type) is that
+                # site's problem; the scan goes on and still closes its run
+                broken += 1
+                res.unknown += 1
+                continue
             if verdict == "found":
+                name = str(site.get("name") or pretty)
                 res.found += 1
-                cid = record_fetch(conn, TOOL, r, note=f"{site['name']}: account exists")
+                cid = record_fetch(conn, TOOL, r, note=f"{name}: account exists")
                 _, how = X.upsert(
-                    conn, subject_id, username, "account", "whatsmyname", str(site["name"]),
-                    title=str(site["name"]), url=pretty, detail={"category": site.get("cat")},
+                    conn, subject_id, username, "account", "whatsmyname", name,
+                    title=name, url=pretty, detail={"category": site.get("cat")},
                     capture_id=cid,
                 )  # fmt: skip
                 if how == "new":
@@ -172,9 +218,11 @@ def scan_usernames(
                 res.missing += 1
             else:
                 res.unknown += 1
+    if broken:
+        res.notes.append(f"{broken} check(s) skipped: the site rule could not be used")
     conn.execute(
-        "UPDATE scan_runs SET finished_at=?, counts_json=? WHERE id=?",
-        (now_iso(), json.dumps(res.counts), res.run_id),
+        "UPDATE scan_runs SET finished_at=?, counts_json=?, note=? WHERE id=?",
+        (now_iso(), json.dumps(res.counts), "; ".join(res.notes) or None, res.run_id),
     )
     conn.commit()
     audit.append("scan.usernames.finish", subject=subject_id, run_id=res.run_id, **res.counts)

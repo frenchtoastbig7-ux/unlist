@@ -20,17 +20,13 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from unlist.catalog.models import Broker
+from unlist.catalog.models import Broker, name_slug
 
 csv.field_size_limit(10_000_000)
 
 MARKUP_URL = "https://github.com/the-markup/investigation-data-broker-opt-out-pages"
 
-_NON_SLUG = re.compile(r"[^a-z0-9]+")
-_CORP = re.compile(
-    r"\b(inc|llc|l\.l\.c|ltd|limited|corp|corporation|co|company|plc|gmbh|lp|llp|holdings)\b\.?",
-    re.IGNORECASE,
-)
+_ID_MAX = 64  # the Broker id pattern
 
 # CPPA column prefixes (the headers are long sentences; match on their start).
 _COL = {
@@ -69,10 +65,32 @@ _DISCLOSURES = {
 }
 
 
-def slugify(name: str) -> str:
-    base = _CORP.sub(" ", name.lower())
-    slug = _NON_SLUG.sub("-", base).strip("-")
-    return slug[:60].rstrip("-") or "broker"
+slugify = name_slug
+
+
+class _IdAllocator:
+    """Hands out one id per broker: the name's slug, or slug-2, slug-3 when it is taken.
+
+    Every id issued is remembered, so a counter cannot land on an id another name
+    already produced ("Acme", "Acme LLC", "Acme 2" used to yield acme, acme-2, acme-2).
+    """
+
+    def __init__(self) -> None:
+        self._used: set[str] = set()
+        self._next: dict[str, int] = {}
+
+    def allocate(self, name: str) -> str:
+        base = slugify(name)
+        slug = base
+        n = self._next.get(base, 2)
+        while slug in self._used:
+            suffix = f"-{n}"
+            slug = base[: _ID_MAX - len(suffix)].rstrip("-") + suffix
+            n += 1
+        if slug != base:
+            self._next[base] = n
+        self._used.add(slug)
+        return slug
 
 
 def host_of(url: str | None) -> str | None:
@@ -85,6 +103,14 @@ def host_of(url: str | None) -> str | None:
         u = "https://" + u
     host = urlsplit(u).netloc.lower().removeprefix("www.").rstrip(";,./")
     return host or None
+
+
+def _host_at(url: str | None, where: str, field: str) -> str | None:
+    """host_of, with the source row named when the value cannot be parsed as a URL."""
+    try:
+        return host_of(url)
+    except ValueError as exc:
+        raise ValueError(f"{where}: {field} {url!r} is not a usable URL ({exc})") from exc
 
 
 def _clean_url(url: str | None) -> str | None:
@@ -168,19 +194,15 @@ def build_registry(
     cppa_rows: Iterable[dict[str, object]], markup: dict[str, dict[str, str]] | None = None
 ) -> list[Broker]:
     markup = markup or {}
-    seen: dict[str, int] = {}
+    ids = _IdAllocator()
     brokers: list[Broker] = []
-    for row in cppa_rows:
+    for row_no, row in enumerate(cppa_rows, start=1):
         name = str(row["name"]).strip()
         if not name:
             continue
-        slug = slugify(name)
-        n = seen.get(slug, 0)
-        seen[slug] = n + 1
-        if n:
-            slug = f"{slug}-{n + 1}"
         website = _clean_url(str(row["website"]))
-        host = host_of(website)
+        host = _host_at(website, f"CPPA row {row_no} ({name!r})", "website")
+        slug = ids.allocate(name)
         privacy_url = _clean_url(str(row["privacy_url"]))
         notes: list[str] = []
         m = None
@@ -198,7 +220,9 @@ def build_registry(
                 )
         aka = [a.strip() for a in str(row["dba"]).replace(",", ";").split(";") if a.strip()]
         email = str(row["email"]) or None
-        method = "email" if email else ("form" if privacy_url else "unknown")
+        # The CPPA column is a page about privacy rights, not a removal form: without an
+        # email the way out stays unknown and the page is kept as the privacy contact.
+        method = "email" if email else "unknown"
         brokers.append(
             Broker(
                 id=slug,
@@ -213,7 +237,11 @@ def build_registry(
                     "phone": str(row["phone"]) or None,
                     "postal": str(row["postal"]) or None,
                 },
-                opt_out={"method": method, "url": privacy_url, "email": email},
+                opt_out={
+                    "method": method,
+                    "url": privacy_url if method == "email" else None,
+                    "email": email,
+                },
                 disclosures=list(row["disclosures"]),
                 notes=" ".join(notes),
                 sources=["https://cppa.ca.gov/data_broker_registry/"] + ([MARKUP_URL] if m else []),
@@ -244,6 +272,7 @@ def write_registry_yaml(brokers: list[Broker], path: Path, header: str = "") -> 
 MANUAL_URL = "https://github.com/thumpersecure/opt-out-manual-2026"
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _URL_RE = re.compile(r"https?://[^\s|)]+")
+_CELL_SEP = re.compile(r"(?<!\\)\|")
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 _PAREN = re.compile(r"\(([^)]+)\)")
 _MANUAL_CATEGORY = {
@@ -269,7 +298,7 @@ def _md_tables(text: str) -> list[tuple[list[str], list[list[str]]]]:
                 tables.append((headers, rows))
             headers, rows, prev = None, [], None
             continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        cells = _md_cells(line)
         if all(re.fullmatch(r":?-+:?", c) for c in cells if c) and prev is not None:
             headers, rows = prev, []
             continue
@@ -279,6 +308,15 @@ def _md_tables(text: str) -> list[tuple[list[str], list[list[str]]]]:
     if headers is not None:
         tables.append((headers, rows))
     return tables
+
+
+def _md_cells(line: str) -> list[str]:
+    """Cells of one table row. A pipe written as \\| is text inside its cell."""
+    inner = line.strip()
+    inner = inner[1:] if inner.startswith("|") else inner
+    if inner.endswith("|") and not inner.endswith("\\|"):
+        inner = inner[:-1]
+    return [c.replace("\\|", "|").strip() for c in _CELL_SEP.split(inner)]
 
 
 def _site_name(cell: str) -> tuple[str, list[str], str | None]:
@@ -409,21 +447,18 @@ def read_optout_manual(path: Path) -> list[dict[str, object]]:
 
 
 def build_manual_registry(rows: Iterable[dict[str, object]]) -> list[Broker]:
-    seen: dict[str, int] = {}
+    ids = _IdAllocator()
     hosts_seen: set[str] = set()
     brokers: list[Broker] = []
-    for row in rows:
+    for row_no, row in enumerate(rows, start=1):
         name = str(row["name"])
-        host = host_of(str(row["domain"])) if row["domain"] else None
+        where = f"opt-out manual row {row_no} ({name!r})"
+        host = _host_at(str(row["domain"]), where, "domain") if row["domain"] else None
         if host and host in hosts_seen:
             continue  # the same site listed in two tables: keep the first, more detailed row
         if host:
             hosts_seen.add(host)
-        slug = slugify(name)
-        n = seen.get(slug, 0)
-        seen[slug] = n + 1
-        if n:
-            slug = f"{slug}-{n + 1}"
+        slug = ids.allocate(name)
         link = _clean_url(str(row["link"])) if row["link"] else None
         email = str(row["email"]) if row["email"] else None
         method = str(row["method"])
@@ -471,8 +506,9 @@ def read_jdm(path: Path) -> list[dict[str, object]]:
         # The service's own domains; the deletion page may live elsewhere (a help desk,
         # a GitHub issue), so its host is only a fallback when none are listed.
         domains = sorted({d.lower().removeprefix("www.") for d in item.get("domains") or [] if d})
-        if not domains and host_of(url):
-            domains = [host_of(url)]
+        if not domains:
+            host = _host_at(url, f"JustDeleteMe entry {name!r}", "url")
+            domains = [host] if host else []
         entry: dict[str, object] = {
             "name": name,
             "url": url,

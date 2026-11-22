@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
+
+from unlist.core import timeutil
 
 IdentifierKind = Literal[
     "name", "alias", "email", "phone", "address", "dob", "username", "relative", "domain"
@@ -37,7 +39,7 @@ class ConsentError(RuntimeError):
 
 
 def utcnow() -> datetime:
-    return datetime.now(UTC)
+    return timeutil._clock()
 
 
 class Consent(BaseModel):
@@ -55,7 +57,7 @@ class Consent(BaseModel):
         return v.strip()
 
     def check(self, when: date | None = None) -> None:
-        today = when or utcnow().date()
+        today = when or timeutil.today()
         if today < self.granted:
             raise ConsentError(
                 f"Consent ({self.instrument}) does not take effect until {self.granted}."
@@ -67,7 +69,7 @@ class Consent(BaseModel):
             )
 
     def days_left(self, when: date | None = None) -> int:
-        return (self.expires - (when or utcnow().date())).days
+        return (self.expires - (when or timeutil.today())).days
 
 
 def normalise_phone(value: str) -> str:
@@ -106,7 +108,7 @@ class Identifier(BaseModel):
     def model_post_init(self, __context: Any) -> None:
         if self.kind == "email":
             self.value = self.value.lower()
-            if not _EMAIL.match(self.value):
+            if not _EMAIL.fullmatch(self.value):
                 raise ValueError(f"not an email address: {self.value}")
         elif self.kind == "phone":
             self.value = normalise_phone(self.value)
@@ -115,7 +117,7 @@ class Identifier(BaseModel):
         elif self.kind == "domain":
             self.value = self.value.lower().removeprefix("https://").removeprefix("http://")
             self.value = self.value.removeprefix("www.").strip("/")
-            if not _DOMAIN.match(self.value):
+            if not _DOMAIN.fullmatch(self.value):
                 raise ValueError(f"not a domain name: {self.value}")
         elif self.kind == "dob":
             try:
@@ -145,7 +147,7 @@ class Subject(BaseModel):
     @field_validator("id")
     @classmethod
     def _slug(cls, v: str) -> str:
-        if not _SLUG.match(v):
+        if not _SLUG.fullmatch(v):
             raise ValueError("id must be a short slug: lowercase letters, digits, hyphens")
         return v
 

@@ -356,7 +356,14 @@ def test_form_prefill_and_letter_and_drop(conn, data_dir, monkeypatch):
     d = record_drop(conn, "me", "12345678")
     assert d["channel"] == "drop" and d["state"] == "submitted" and d["deadline"]
     assert record_drop(conn, "me", "87654321")["id"] == d["id"]
-    assert "not a California" in drop_profile(conn, "me") or True
+
+
+def test_drop_is_for_california_residents_only(conn, data_dir):
+    make_subject(conn, state="TX")
+    assert "not a California" in drop_profile(conn, "me")
+    with pytest.raises(ValueError, match="not a California"):
+        record_drop(conn, "me", "12345678")
+    assert list_for(conn, "me") == []
 
 
 def test_mcp_request_tools(conn, data_dir, monkeypatch):

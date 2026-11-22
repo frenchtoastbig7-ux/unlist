@@ -106,9 +106,22 @@ def _page(
         if res:
             res.challenged += 1
         return None, cap.final_url, cid, "challenged", cap.note
+    if not _browser_ok(cap.status):
+        # an error or maintenance page is kept as evidence but is not search results
+        if res:
+            res.errors += 1
+        note = "; ".join(p for p in (cap.note, f"browser: HTTP {cap.status}") if p)
+        return None, cap.final_url, cid, "error", note
     if res:
         res.browser += 1
     return cap.html, cap.final_url, cid, "browser", cap.note
+
+
+def _browser_ok(status: int | None) -> bool:
+    """A browser page is usable content on a 2xx. Unknown (None) is allowed through:
+    Chromium reports no status for a document it did not navigate to, e.g. after the
+    operator cleared a challenge in place."""
+    return status is None or 200 <= status < 300
 
 
 def scan_brokers(
@@ -222,6 +235,7 @@ def verify_finding(
     cid = record_fetch(conn, TOOL, result, note=f"verify finding {finding_id}")
     body: bytes | None = None
     status = result.status
+    status_known = True
     if result.ok and not looks_like_challenge(result.body.decode("utf-8", "replace")):
         body = result.body
     elif result.status in (404, 410):
@@ -231,34 +245,51 @@ def verify_finding(
             cap = browser.capture(url)
             cid = record_browser(conn, TOOL, cap, note=f"verify finding {finding_id}")
             status = cap.status
-            if not cap.challenged:
-                body = cap.html if cap.status not in (404, 410) else b""
+            if cap.challenged:
+                pass
+            elif cap.status in (404, 410):
+                body = b""
+            elif _browser_ok(cap.status):
+                body = cap.html
+                status_known = cap.status is not None
+            # any other status is an error or maintenance page: no evidence either way
         except Exception as exc:
             return "unknown", f"browser: {exc}"
     if body is None:
         return "unknown", result.reason or result.error or f"HTTP {status}"
     present = bool(body) and name_present(body, profile) and _still_a_listing(body, broker)
+    if not present and not status_known:
+        # A page whose status could not be established may be an error page; a missing
+        # name on it does not show that the listing was removed.
+        return "unknown", "page loaded in the browser but its HTTP status is unknown"
     now = now_iso()
+    # Both writes decide from the row as it is now, not as it was before the fetch: the
+    # operator may have changed the finding while the page was loading.
     if present:
-        new_status = "reappeared" if row["status"] == "removed" else row["status"]
         conn.execute(
-            "UPDATE findings SET last_seen=?, verified_at=?, capture_id=?, status=?, "
-            "status_changed_at=CASE WHEN status<>? THEN ? ELSE status_changed_at END WHERE id=?",
-            (now, now, cid, new_status, new_status, now, finding_id),
+            "UPDATE findings SET last_seen=?, verified_at=?, capture_id=?, "
+            "status_changed_at=CASE WHEN status='removed' THEN ? ELSE status_changed_at END, "
+            "status=CASE WHEN status='removed' THEN 'reappeared' ELSE status END WHERE id=?",
+            (now, now, cid, now, finding_id),
         )
         conn.commit()
+        new_status = F.get(conn, finding_id)["status"]
         AuditLog().append(
             "finding.verify", finding_id=finding_id, verdict="present", status=new_status
         )
         return "present", f"listing still shows the name (HTTP {status})"
-    if row["status"] != "removed":
-        F.set_status(conn, finding_id, "removed", note=f"verified gone {now[:10]}")
+    detail = f"listing no longer shows the name (HTTP {status})"
+    if row["status"] != "removed" and not F.set_status_if(
+        conn, finding_id, row["status"], "removed", note=f"verified gone {now[:10]}"
+    ):
+        detail += "; status was changed meanwhile and is left as it is"
     conn.execute(
         "UPDATE findings SET verified_at=?, capture_id=? WHERE id=?", (now, cid, finding_id)
     )
     conn.commit()
-    AuditLog().append("finding.verify", finding_id=finding_id, verdict="gone", status="removed")
-    return "gone", f"listing no longer shows the name (HTTP {status})"
+    new_status = F.get(conn, finding_id)["status"]
+    AuditLog().append("finding.verify", finding_id=finding_id, verdict="gone", status=new_status)
+    return "gone", detail
 
 
 def _still_a_listing(body: bytes, broker: Broker) -> bool:

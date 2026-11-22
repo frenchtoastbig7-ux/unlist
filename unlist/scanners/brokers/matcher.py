@@ -110,7 +110,7 @@ def extract_candidates(
     name_anchors: dict = {}
     for a in tree.iter("a"):
         href = a.get("href")
-        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+        if not href or href.strip().lower().startswith(("#", "javascript:", "mailto:", "tel:")):
             continue
         anchor_text = _text(a)
         if not anchor_text or len(anchor_text) > 80:
@@ -122,6 +122,8 @@ def extract_candidates(
         href = a.get("href")
         anchor_text = _text(a)
         url = urljoin(page_url, href)
+        if urlsplit(url).scheme.lower() not in ("http", "https"):
+            continue  # JavaScript://host/... carries an allowed host but is not a page
         host = urlsplit(url).netloc.lower().removeprefix("www.")
         if not any(host == h or host.endswith("." + h) for h in allowed):
             continue
@@ -138,7 +140,8 @@ def extract_candidates(
         cand.score, cand.reasons = score(cand, profile, matched[0].middle)
         _kind_bonus(cand, kind)
         found[url] = cand
-    if not found and kind in ("phone", "address"):
+    # A "no results for Jane Doe" page echoes the name too; that is not a listing.
+    if not found and kind in ("phone", "address") and not looks_like_no_results(_text(tree)):
         text = _text(tree)
         for n in profile.names:
             if _name_in(text, n.first, n.last):

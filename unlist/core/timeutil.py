@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from dateutil import parser as _dparser
 
@@ -13,9 +13,19 @@ _INTERVAL_RE = re.compile(r"^\s*(\d+)\s*([smhdw])\s*$", re.IGNORECASE)
 _UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
 
 
+def _clock() -> datetime:
+    """The one place the application reads the wall clock (tests pin this)."""
+    return datetime.now(UTC)
+
+
 def utcnow() -> datetime:
     """Current time as an aware UTC datetime, truncated to whole seconds."""
-    return datetime.now(UTC).replace(microsecond=0)
+    return _clock().replace(microsecond=0)
+
+
+def today() -> date:
+    """Today's date in UTC: the date consent windows are judged against."""
+    return _clock().date()
 
 
 def to_utc(dt: datetime) -> datetime:
@@ -45,20 +55,20 @@ def parse_dt(value: str | datetime | int | float | None) -> datetime | None:
         return None
     if isinstance(value, datetime):
         return to_utc(value)
-    if isinstance(value, int | float):
-        return datetime.fromtimestamp(float(value), tz=UTC)
-    text = str(value).strip()
-    if not text:
-        return None
-    if re.fullmatch(r"\d{14}", text):
-        return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
-    if re.fullmatch(r"\d{9,11}(\.\d+)?", text):
-        return datetime.fromtimestamp(float(text), tz=UTC)
     try:
-        parsed = _dparser.parse(text)
-    except (ValueError, OverflowError):
+        if isinstance(value, int | float):
+            return datetime.fromtimestamp(float(value), tz=UTC)
+        text = str(value).strip()
+        if not text:
+            return None
+        if re.fullmatch(r"\d{14}", text):
+            return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=UTC)
+        if re.fullmatch(r"\d{9,11}(\.\d+)?", text):
+            return datetime.fromtimestamp(float(text), tz=UTC)
+        return to_utc(_dparser.parse(text))
+    except (ValueError, OverflowError, OSError):
+        # Not a date after all: an impossible 14-digit stamp, an epoch out of range, nan.
         return None
-    return to_utc(parsed)
 
 
 def normalise(value: str | datetime | int | float | None) -> str | None:

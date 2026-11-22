@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Iterable
 from pathlib import Path
 
 import yaml
 
-from unlist.catalog.models import GENERATED_ORIGINS, Broker
+from unlist.catalog.models import GENERATED_ORIGINS, Broker, name_slug, normalise_host
 
 PACKAGE_DIR = Path(__file__).parent
 BROKERS_DIR = PACKAGE_DIR / "brokers"
@@ -60,7 +61,14 @@ def absorb(primary: Broker, registry_row: Broker) -> Broker:
         r = registry_row.opt_out
         if r.method != "unknown":
             opt_out.method = r.method
-            opt_out.url = opt_out.url or r.url
+            if r.method in ("form", "account") and r.url:
+                # The method and its URL travel together: a general privacy page the
+                # curated entry had here is not the form, so it moves to the contact.
+                if opt_out.url and opt_out.url != r.url and contact.privacy_url is None:
+                    contact.privacy_url = opt_out.url
+                opt_out.url = r.url
+            else:
+                opt_out.url = opt_out.url or r.url
             opt_out.requires = opt_out.requires or list(r.requires)
             opt_out.notes = opt_out.notes or r.notes
     update["opt_out"] = opt_out
@@ -115,6 +123,23 @@ def merge_generated(base: Broker, extra: Broker) -> Broker:
     return base.model_copy(update=update)
 
 
+def _owns_id(b: Broker) -> bool:
+    """Whether the id says who the company is, rather than the order rows arrived in.
+
+    A curated or operator id was chosen by hand. A generated id is the company's name,
+    unless the importer had to add a counter ("acme-2"), and the two importers count
+    separately, so the same counter can land on unrelated companies.
+    """
+    return b.origin not in GENERATED_ORIGINS or b.id == name_slug(b.name)
+
+
+def _same_company(a: Broker, b: Broker) -> bool:
+    """Two rows with one id are one company if they share a host or both own the id."""
+    if any(a.matches_host(h) for h in b.hosts) or any(b.matches_host(h) for h in a.hosts):
+        return True
+    return _owns_id(a) and _owns_id(b)
+
+
 class Catalog:
     def __init__(self, brokers: Iterable[Broker]) -> None:
         self._by_id: dict[str, Broker] = {}
@@ -129,28 +154,54 @@ class Catalog:
                 if host_index.get(h) == b.id:
                     del host_index[h]
 
+        def free_id(base: str) -> str:
+            for n in itertools.count(2):
+                suffix = f"-{n}"
+                candidate = base[: 64 - len(suffix)].rstrip("-") + suffix
+                if candidate not in self._by_id:
+                    return candidate
+            raise AssertionError("unreachable")  # pragma: no cover
+
         for b in brokers:
             if b.origin in GENERATED_ORIGINS:
-                other_id = b.id if b.id in self._by_id else None
-                if other_id is None:
-                    other_id = next((host_index[h] for h in b.hosts if h in host_index), None)
-                other = self._by_id.get(other_id) if other_id else None
-                if other is not None and other.origin in GENERATED_ORIGINS:
-                    unindex(other)
-                    del self._by_id[other.id]
-                    b = merge_generated(other, b)
-                elif other is not None:
+                same = self._by_id.get(b.id)
+                if same is not None and not _same_company(same, b):
+                    # Same generated id, nothing else in common: a different company.
+                    b = b.model_copy(update={"id": free_id(b.id)})
+                    same = None
+                if same is not None and same.origin not in GENERATED_ORIGINS:
                     continue  # an id already taken by a curated or operator entry
+                # Every generated row this one matches, by id or by any of its hosts, is
+                # folded in, so no row is left behind holding a host the index gave away.
+                matches = [same.id] if same is not None else []
+                for h in b.hosts:
+                    other_id = host_index.get(h)
+                    if other_id is not None and other_id not in matches:
+                        matches.append(other_id)
+                for other_id in matches:
+                    other = self._by_id.pop(other_id)
+                    unindex(other)
+                    b = merge_generated(other, b)
                 self._by_id[b.id] = b
                 index(b)
                 continue
             for other in list(self._by_id.values()):
                 if other.origin not in GENERATED_ORIGINS:
                     continue
-                if other.id == b.id or any(b.matches_host(h) for h in other.hosts):
+                if any(b.matches_host(h) for h in other.hosts) or (
+                    other.id == b.id and _owns_id(other)
+                ):
                     b = absorb(b, other)
                     unindex(other)
                     del self._by_id[other.id]
+                elif other.id == b.id:
+                    # A counter-suffixed generated id that happens to equal this entry's:
+                    # keep that company, under an id of its own.
+                    unindex(other)
+                    del self._by_id[other.id]
+                    moved = other.model_copy(update={"id": free_id(other.id)})
+                    self._by_id[moved.id] = moved
+                    index(moved)
             self._by_id[b.id] = b  # later wins: registry < curated < operator
 
     def __len__(self) -> int:
@@ -169,10 +220,19 @@ class Catalog:
             raise KeyError(f"no broker {broker_id!r} in the catalog") from None
 
     def by_host(self, host: str) -> Broker | None:
+        """The broker listing this exact host, else the one with the longest parent domain."""
+        host = normalise_host(host)
+        if not host:
+            return None
+        best: Broker | None = None
+        best_len = 0
         for b in self._by_id.values():
-            if b.matches_host(host):
-                return b
-        return None
+            for h in b.hosts:
+                if host == h:
+                    return b
+                if host.endswith("." + h) and len(h) > best_len:
+                    best, best_len = b, len(h)
+        return best
 
     def search(self, text: str, limit: int = 50) -> list[Broker]:
         q = text.lower().strip()

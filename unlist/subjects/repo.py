@@ -138,7 +138,7 @@ class SubjectRepo:
         if not self.exists(subject_id):
             raise KeyError(f"no subject {subject_id!r}")
         ident = ident.model_copy(update={"subject_id": subject_id})
-        cur = self.conn.execute(
+        self.conn.execute(
             """INSERT INTO identifiers(subject_id, kind, value, current, meta_json, note, added_at)
                VALUES (?,?,?,?,?,?,?)
                ON CONFLICT(subject_id, kind, value) DO UPDATE SET
@@ -155,8 +155,14 @@ class SubjectRepo:
             ),
         )
         self.conn.commit()
-        if cur.lastrowid:
-            ident.id = int(cur.lastrowid)
+        # lastrowid is the connection's last INSERT, which is another row when this
+        # call took the update branch; ask for the row by its key instead.
+        row = self.conn.execute(
+            "SELECT id FROM identifiers WHERE subject_id = ? AND kind = ? AND value = ?",
+            (subject_id, ident.kind, ident.value),
+        ).fetchone()
+        if row is not None:
+            ident.id = int(row["id"])
         return ident
 
     def remove_identifier(self, identifier_id: int) -> None:

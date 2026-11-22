@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
+import os
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,13 +33,38 @@ def connect(db: Path | str | None = None) -> sqlite3.Connection:
     memory = str(path) == ":memory:"
     if not memory:
         path.parent.mkdir(parents=True, exist_ok=True)
+        # SQLite gives a new -wal/-shm the mode of the database file, so the database
+        # must be private before it is opened, and sidecars left by an earlier, laxer
+        # run are tightened before any subject data is written to them.
+        with contextlib.suppress(OSError):
+            os.close(os.open(path, os.O_CREAT | os.O_RDWR, 0o600))
+        _make_db_private(path)
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     if not memory:
         conn.execute("PRAGMA journal_mode = WAL")
-        paths.make_private(path)
+        _make_db_private(path)
     return conn
+
+
+def _make_db_private(path: Path) -> None:
+    for p in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+        paths.make_private(p)
+
+
+def _statements(sql: str) -> list[str]:
+    """Split a migration script into statements (triggers keep their inner semicolons)."""
+    out: list[str] = []
+    buf = ""
+    for line in sql.splitlines(keepends=True):
+        buf += line
+        if sqlite3.complete_statement(buf):
+            out.append(buf)
+            buf = ""
+    if buf.strip():
+        out.append(buf)
+    return out
 
 
 def migrate(conn: sqlite3.Connection, extra_dirs: Iterable[Path] = ()) -> list[str]:
@@ -46,6 +73,7 @@ def migrate(conn: sqlite3.Connection, extra_dirs: Iterable[Path] = ()) -> list[s
     Each file is applied at most once, tracked in schema_migrations by
     '<package>/<filename>'. Returns the names applied in this call.
     """
+    conn.commit()
     conn.execute(
         "CREATE TABLE IF NOT EXISTS schema_migrations "
         "(name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
@@ -59,13 +87,35 @@ def migrate(conn: sqlite3.Connection, extra_dirs: Iterable[Path] = ()) -> list[s
             name = f"{key_prefix}/{sql_file.name}"
             if name in done:
                 continue
-            conn.executescript(sql_file.read_text(encoding="utf-8"))
-            conn.execute(
-                "INSERT INTO schema_migrations(name, applied_at) VALUES (?, ?)", (name, now_iso())
-            )
-            applied.append(name)
-    conn.commit()
+            if _apply_migration(conn, name, sql_file.read_text(encoding="utf-8")):
+                applied.append(name)
     return applied
+
+
+def _apply_migration(conn: sqlite3.Connection, name: str, sql: str) -> bool:
+    """Run one script and record it in a single transaction. False if already applied.
+
+    executescript would commit after every statement, so a crash could leave half a
+    script applied with no history row and the next open would fail on it. BEGIN
+    IMMEDIATE also takes the write lock, so a second process opening the database
+    waits here and then finds the row instead of running the script again.
+    """
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute("SELECT 1 FROM schema_migrations WHERE name = ?", (name,)).fetchone()
+        if row is not None:
+            conn.rollback()
+            return False
+        for statement in _statements(sql):
+            conn.execute(statement)
+        conn.execute(
+            "INSERT INTO schema_migrations(name, applied_at) VALUES (?, ?)", (name, now_iso())
+        )
+        conn.commit()
+    except BaseException:
+        conn.rollback()
+        raise
+    return True
 
 
 def sha256_hex(data: bytes) -> str:
@@ -173,7 +223,12 @@ def get_capture(conn: sqlite3.Connection, capture_id: int) -> sqlite3.Row | None
 def headers_to_json(headers) -> str:
     """Serialise headers (mapping or list of pairs) as a sorted JSON object of lists."""
     out: dict[str, list[str]] = {}
-    items = headers.multi_items() if hasattr(headers, "multi_items") else dict(headers).items()
+    if hasattr(headers, "multi_items"):
+        items = headers.multi_items()
+    elif isinstance(headers, Mapping):
+        items = headers.items()
+    else:
+        items = headers  # pairs: a repeated name (Set-Cookie, Link) keeps every value
     for k, v in items:
         out.setdefault(str(k).lower(), []).append(str(v))
     return json.dumps(out, ensure_ascii=False, sort_keys=True)

@@ -2,7 +2,7 @@
 {% block title %}{{ s.label }} · unlist{% endblock %}
 {% block body %}
 <h1>{{ s.label }} <span class="muted">({{ s.id }}, {{ s.kind }}, {{ s.residency_state or '' }} {{ s.residency_country }}, regime {{ s.legal_regime }})</span></h1>
-<p>Consent: {% if consent_state == 'none' %}<span class="tag reappeared">none recorded</span>{% elif consent_state.startswith('EXPIRED') %}<span class="tag reappeared">{{ consent_state }}</span>{% else %}<span class="tag removed">{{ consent_state }}</span>{% endif %}
+<p>Consent: {% if consent_state == 'none' %}<span class="tag reappeared">none recorded</span>{% elif consent_state.startswith(('EXPIRED', 'NOT YET')) %}<span class="tag reappeared">{{ consent_state }}</span>{% else %}<span class="tag removed">{{ consent_state }}</span>{% endif %}
  · <a href="/subjects/{{ s.id }}/report">exposure report</a>{% if s.is_california %} · <a href="/subjects/{{ s.id }}/drop">California DROP</a>{% endif %}</p>
 
 <div class="scorebox">
@@ -46,15 +46,15 @@
 <h2>Scans</h2>
 <form method="post" action="/subjects/{{ s.id }}/scan/breaches" class="inline"><button>Scan breaches</button></form>
 <form method="post" action="/subjects/{{ s.id }}/scan/brokers" class="inline" style="margin-left:8px">
-  <select name="use_browser"><option value="1">with browser</option><option value="0">HTTP only</option></select>
-  <select name="kinds"><option value="">name, phone and address</option><option value="name">name only</option><option value="phone">phone only</option><option value="address">address only</option></select>
-  <input name="brokers" placeholder="broker ids (blank = all searchable)" style="min-width:220px">
+  <select name="use_browser" aria-label="Browser mode"><option value="1">with browser</option><option value="0">HTTP only</option></select>
+  <select name="kinds" aria-label="Search by"><option value="">name, phone and address</option><option value="name">name only</option><option value="phone">phone only</option><option value="address">address only</option></select>
+  <input name="brokers" aria-label="Broker ids" placeholder="broker ids (blank = all searchable)" style="min-width:220px">
   <button>Scan people-search sites</button>
 </form>
 <p>
 <form method="post" action="/subjects/{{ s.id }}/scan/usernames" class="inline">
-  <input name="limit" type="number" min="0" value="0" title="0 = every site" style="min-width:70px;width:70px">
-  <input name="categories" placeholder="categories (blank = all)" style="min-width:170px">
+  <input name="limit" aria-label="Site limit" type="number" min="0" value="0" title="0 = every site" style="min-width:70px;width:70px">
+  <input name="categories" aria-label="Site categories" placeholder="categories (blank = all)" style="min-width:170px">
   <button>Scan usernames</button>
 </form>
 <form method="post" action="/subjects/{{ s.id }}/scan/domains" class="inline" style="margin-left:8px"><button>Check owned domains</button></form>
@@ -71,14 +71,14 @@
 <td>{{ g.identifiers|join(', ') }}</td>
 <td class="muted">{{ exposed(g, 110) or 'not stated' }}</td>
 <td>{{ g.source_labels|join(', ') }}</td>
-<td>{% for link in g.links[:2] %}<a href="{{ link.url }}" target="_blank" rel="noreferrer noopener">{{ link.label.split(':')[0]|truncate(26) }} ↗</a>{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">no public page</span>{% endfor %}</td>
+<td>{% for link in g.links[:2] %}{% if link.url|http_url %}<a href="{{ link.url|http_url }}" target="_blank" rel="noreferrer noopener">{{ link.label.split(':')[0]|truncate(26) }} ↗</a>{% else %}{{ link.label.split(':')[0]|truncate(26) }}{% endif %}{% if not loop.last %}<br>{% endif %}{% else %}<span class="muted">no public page</span>{% endfor %}</td>
 </tr>{% else %}<tr><td colspan="6" class="muted">none recorded</td></tr>{% endfor %}
 </table>
 {% if breaches %}<p class="muted">Open a breach for its description, every source link, the stored answer from each source, and what to do about it.</p>{% endif %}
 
 <h2>Accounts, mentions and domains ({{ exposures|length }})</h2>
 <table><tr><th>id</th><th>kind</th><th>status</th><th>what</th><th>identifier</th><th>url</th></tr>
-{% for e in exposures %}<tr><td>{{ e.id }}</td><td>{{ e.kind }}</td><td><span class="tag {{ e.status }}">{{ e.status }}</span></td><td>{{ e.title or e.key }}</td><td>{{ e.identifier_value }}</td><td class="muted">{% if e.url %}<a href="{{ e.url }}" target="_blank" rel="noreferrer">{{ e.url|truncate(60) }}</a>{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="muted">none yet; add a username or domain identifier and scan</td></tr>{% endfor %}
+{% for e in exposures %}<tr><td>{{ e.id }}</td><td>{{ e.kind }}</td><td><span class="tag {{ e.status }}">{{ e.status }}</span></td><td>{{ e.title or e.key }}</td><td>{{ e.identifier_value }}</td><td class="muted">{% if e.url|http_url %}<a href="{{ e.url|http_url }}" target="_blank" rel="noreferrer">{{ e.url|truncate(60) }}</a>{% else %}{{ (e.url or '')|truncate(60) }}{% endif %}</td></tr>{% else %}<tr><td colspan="6" class="muted">none yet; add a username or domain identifier and scan</td></tr>{% endfor %}
 </table>
 {% if exposures %}<p><a href="/exposures?subject={{ s.id }}">review them</a></p>{% endif %}
 

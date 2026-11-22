@@ -2,14 +2,16 @@ import stat
 from pathlib import Path
 
 from unlist.core import store
-from unlist.db import open_db
+from unlist.db import MIGRATION_DIRS, open_db
 
 
 def test_migrate_is_idempotent(conn):
-    assert store.migrate(conn) == []
+    assert store.migrate(conn, MIGRATION_DIRS) == []
     names = {r[0] for r in conn.execute("SELECT name FROM schema_migrations")}
     assert "core/0001_captures.sql" in names
     assert "subjects/0001_subjects.sql" in names
+    on_disk = sum(len(list(d.glob("*.sql"))) for d in (store.CORE_MIGRATIONS, *MIGRATION_DIRS))
+    assert len(names) == on_disk
 
 
 def test_db_file_is_private(data_dir):

@@ -25,10 +25,15 @@ class XposedOrNotClient:
             d = json.loads(r.body)
         except ValueError:
             return r, None
+        if not isinstance(d, dict):
+            return r, None
         if "Error" in d:
             return r, [] if "not found" in str(d["Error"]).lower() else None
+        groups = d.get("breaches")
+        if not isinstance(groups, list):
+            return r, None
         names: list[str] = []
-        for group in d.get("breaches") or []:
+        for group in groups:
             if isinstance(group, list):
                 names.extend(str(n) for n in group)
             elif isinstance(group, str):
@@ -37,6 +42,7 @@ class XposedOrNotClient:
 
 
 ANALYTICS = "https://api.xposedornot.com/v1/breach-analytics?email="
+_ANALYTICS_KEYS = ("ExposedBreaches", "BreachesSummary", "BreachMetrics", "PastesSummary")
 
 
 def parse_analytics(body: bytes) -> tuple[list[Breach], dict] | None:
@@ -45,11 +51,18 @@ def parse_analytics(body: bytes) -> tuple[list[Breach], dict] | None:
         d = json.loads(body)
     except ValueError:
         return None
-    if not isinstance(d, dict) or "Error" in d:
-        return ([], {}) if "not found" in str(d.get("Error", "")).lower() else None
-    details = ((d.get("ExposedBreaches") or {}).get("breaches_details")) or []
+    if not isinstance(d, dict):
+        return None
+    if "Error" in d:
+        return ([], {}) if "not found" in str(d["Error"]).lower() else None
+    if not any(k in d for k in _ANALYTICS_KEYS):
+        return None  # an object, but not an analytics answer: the caller falls back
+    exposed = d.get("ExposedBreaches")
+    details = exposed.get("breaches_details") if isinstance(exposed, dict) else None
     hits = []
-    for b in details:
+    for b in details if isinstance(details, list) else []:
+        if not isinstance(b, dict):
+            continue
         name = str(b.get("breach") or "")
         if not name:
             continue
@@ -65,18 +78,23 @@ def parse_analytics(body: bytes) -> tuple[list[Breach], dict] | None:
                 is_verified=str(b.get("verified", "")).lower() in ("yes", "true", "1"),
             )
         )
-    metrics_src = d.get("BreachMetrics") or {}
-    risk = (metrics_src.get("risk") or [{}])[0] if metrics_src.get("risk") else {}
-    pastes = d.get("PastesSummary") or {}
+    metrics_src = _obj(d.get("BreachMetrics"))
+    risk = _first_obj(metrics_src.get("risk"))
     metrics = {
         "risk_label": risk.get("risk_label"),
         "risk_score": risk.get("risk_score"),
-        "pastes": pastes.get("cnt") or 0,
-        "password_strength": (metrics_src.get("passwords_strength") or [{}])[0]
-        if metrics_src.get("passwords_strength")
-        else {},
+        "pastes": _obj(d.get("PastesSummary")).get("cnt") or 0,
+        "password_strength": _first_obj(metrics_src.get("passwords_strength")),
     }
     return hits, metrics
+
+
+def _obj(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _first_obj(value: object) -> dict:
+    return _obj(value[0]) if isinstance(value, list) and value else {}
 
 
 def analytics(fetcher: Fetcher, email: str) -> tuple[FetchResult, tuple[list[Breach], dict] | None]:

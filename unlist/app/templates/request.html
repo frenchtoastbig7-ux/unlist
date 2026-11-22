@@ -3,7 +3,7 @@
 <h1>Request {{ r.id }} · {{ r.broker_id }} <span class="tag {{ r.state }}">{{ r.state }}</span></h1>
 <p>{{ r.channel }} · {{ r.basis }} · tag {{ r.tag }} · subject <a href="/subjects/{{ r.subject_id }}">{{ r.subject_id }}</a> {% if ':' not in r.broker_id and r.broker_id not in ('google-results', 'california-drop') %}· <a href="/catalog/{{ r.broker_id }}">catalog</a>{% endif %}</p>
 <p class="muted">created {{ r.created_at }}{% if r.approved_at %} · approved {{ r.approved_at }}{% endif %}{% if r.sent_at %} · sent {{ r.sent_at }}{% endif %}{% if r.deadline %} · deadline {{ r.deadline[:10] }}{% endif %}{% if r.note %} · {{ r.note }}{% endif %}</p>
-<p>To: {{ r.to_address or r.form_url or r.drop_id or '-' }}{% if listings %} · listings: {% for u in listings %}<a href="{{ u }}" target="_blank" rel="noreferrer">{{ u|truncate(60) }}</a> {% endfor %}{% endif %}</p>
+<p>To: {{ r.to_address or r.form_url or r.drop_id or '-' }}{% if listings %} · listings: {% for u in listings %}{% if u|http_url %}<a href="{{ u|http_url }}" target="_blank" rel="noreferrer">{{ u|truncate(60) }}</a>{% else %}{{ u|truncate(60) }}{% endif %} {% endfor %}{% endif %}</p>
 <p>
 {% if r.state == 'drafted' %}<form class="inline" method="post" action="/requests/{{ r.id }}/approve"><button>Approve</button></form>{% endif %}
 {% if r.channel == 'email' and r.state == 'approved' %}<form class="inline" method="post" action="/requests/send"><input type="hidden" name="ids" value="{{ r.id }}"><button>Send now</button></form>{% endif %}

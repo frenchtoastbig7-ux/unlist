@@ -72,7 +72,10 @@ def status() -> str:
                 s.consent.check(today)
                 consent = f"consent in force until {s.consent.expires} ({s.consent.days_left(today)} days)"
             except ConsentError:
-                consent = f"CONSENT EXPIRED {s.consent.expires}"
+                if today < s.consent.granted:
+                    consent = f"CONSENT NOT YET IN FORCE (starts {s.consent.granted})"
+                else:
+                    consent = f"CONSENT EXPIRED {s.consent.expires}"
         lines.append(
             f"- **{s.id}** ({s.kind}, {s.label}): {len(s.identifiers)} identifiers, "
             f"residency {s.residency_state or s.residency_country}, {consent}"
@@ -638,7 +641,18 @@ def findings_show(finding_id: int) -> str:
 
 
 def _ids(text: str) -> list[int]:
-    return [int(x) for x in text.replace(",", " ").split() if x.strip().isdigit()]
+    return [int(x) for x in text.replace(",", " ").split() if x.isascii() and x.isdigit()]
+
+
+def _ids_strict(text: str) -> list[int]:
+    """Like _ids, but a token that is not a plain number is an error. For selections
+    that approve or send: a mistyped id must never shrink or widen what is acted on."""
+    out = []
+    for token in text.replace(",", " ").split():
+        if not (token.isascii() and token.isdigit()):
+            raise ValueError(f"{token!r} is not a numeric request id")
+        out.append(int(token))
+    return out
 
 
 def findings_confirm(finding_ids: str, note: str = "") -> str:
@@ -776,6 +790,8 @@ def requests_draft_blind(
     registrants. limit caps the batch. Review and approve before anything is sent."""
     from unlist.requests import draft_blind
 
+    if limit <= 0:
+        return "Not drafted: limit must be at least 1."
     conn = _conn()
     try:
         rows = draft_blind(
@@ -863,17 +879,29 @@ def requests_approve(request_ids: str) -> str:
     """Approve drafted requests (comma-separated ids, or 'all' for every draft). Email
     requests are then sent by requests_send; form requests are opened by form_open."""
     from unlist.requests import approve
-    from unlist.requests.engine import list_for
+    from unlist.requests.engine import get, list_for
 
     conn = _conn()
-    ids = (
-        [r["id"] for r in list_for(conn, None, "drafted")]
-        if request_ids.strip().lower() == "all"
-        else _ids(request_ids)
-    )
+    if request_ids.strip().lower() == "all":
+        ids = [r["id"] for r in list_for(conn, None, "drafted")]
+    else:
+        try:
+            ids = _ids_strict(request_ids)
+        except ValueError as exc:
+            return f"Nothing approved: {exc}."
+        # Every id is looked up before any is approved, so a wrong id cannot leave
+        # the ones before it approved without a word.
+        missing = []
+        for rid in ids:
+            try:
+                get(conn, rid)
+            except KeyError:
+                missing.append(rid)
+        if missing:
+            return f"Nothing approved: no request with id {', '.join(map(str, missing))}."
     rows = approve(conn, ids)
     if not rows:
-        return "Nothing approved (ids not found or not in drafted state)."
+        return "Nothing approved (no ids given, or none in drafted state)."
     by_channel: dict[str, list[int]] = {}
     for r in rows:
         by_channel.setdefault(r["channel"], []).append(r["id"])
@@ -894,27 +922,39 @@ def requests_send(request_ids: str = "", dry_run: bool = False) -> str:
     people-search sites first; the rest stay approved and the monitor sends the next
     share each day. Only approved requests are ever sent."""
     from unlist.requests import send_approved
-    from unlist.requests.engine import list_for
+    from unlist.requests.engine import get, plan_send
     from unlist.requests.mailer import FakeMailer, Mailer, SmtpSettings
 
     conn = _conn()
-    ids = _ids(request_ids) or None
+    ids: list[int] | None = None  # None, and only None, means the whole approved queue
+    if request_ids.strip():
+        try:
+            ids = _ids_strict(request_ids)
+        except ValueError as exc:
+            return f"Nothing sent: {exc}."
+        missing = []
+        for rid in ids:
+            try:
+                get(conn, rid)
+            except KeyError:
+                missing.append(rid)
+        if missing:
+            return f"Nothing sent: no request with id {', '.join(map(str, missing))}."
     if dry_run:
-        rows = list(list_for(conn, None, "approved")) if ids is None else []
-        if ids:
-            from unlist.requests.engine import get as _get
-
-            rows = [_get(conn, i) for i in ids]
-        rows = [r for r in rows if r["channel"] == "email"]
-        return "Would send:\n" + (
-            table(
-                ["id", "to", "subject"],
-                [[r["id"], r["to_address"], r["subject_line"]] for r in rows],
-            )
-            if rows
-            else "nothing"
-        )
-    settings = SmtpSettings.from_env()
+        # plan_send is the selection the live send executes: same order, same state,
+        # channel and consent rules, same daily cap. No mailer is involved.
+        plan = plan_send(conn, ids)
+        go = [[r["id"], r["to_address"], r["subject_line"]] for r in plan.send]
+        held = [[r["id"], plan.held_reason] for r in plan.held]
+        held += [[rid, why] for rid, why in plan.rejected]
+        out = "Would send:\n" + (table(["id", "to", "subject"], go) if go else "nothing")
+        if held:
+            out += "\n\nWould not send:\n" + table(["id", "why"], held)
+        return out
+    try:
+        settings = SmtpSettings.from_env()
+    except ValueError as exc:
+        return f"Nothing sent: {exc}"
     if settings is None:
         return "No mailbox configured: set UNLIST_SMTP_HOST, UNLIST_SMTP_USER and UNLIST_SMTP_PASSWORD in .env (a mailbox created for opt-outs, never your main account)."
     mailer: object = Mailer(settings) if not isinstance(settings, FakeMailer) else settings
@@ -956,7 +996,10 @@ def inbox_poll(limit: int = 50) -> str:
     and move request states. Anything else is surfaced for you."""
     from unlist.requests.inbox import ImapInbox, ImapSettings, process_messages
 
-    settings = ImapSettings.from_env()
+    try:
+        settings = ImapSettings.from_env()
+    except ValueError as exc:
+        return f"Mailbox error: {exc}"
     if settings is None:
         return "No mailbox configured: set UNLIST_IMAP_HOST (and UNLIST_SMTP_USER/PASSWORD or UNLIST_IMAP_USER/PASSWORD) in .env."
     conn = _conn()
@@ -964,13 +1007,14 @@ def inbox_poll(limit: int = 50) -> str:
         with ImapInbox(settings) as inbox:
             messages = inbox.fetch_unseen(limit)
             results = process_messages(conn, messages)
-            for m in messages:
-                inbox.mark_seen(m.uid)
+            unflagged = inbox.mark_seen_all([m.uid for m in messages])
     except Exception as exc:
         return f"Mailbox error: {exc}"
     if not results:
         return "No new messages."
-    return table(
+    # Processed and recorded, so they are not replayed; they only stay unread in the mailbox.
+    note = f"Could not mark {len(unflagged)} message(s) as read: {unflagged[0]}\n\n" if unflagged else ""
+    return note + table(
         ["from", "subject", "class", "request", "action"],
         [
             [r["from"], r["subject"][:50], r["kind"], r["request_id"] or "", r["action"][:90]]
@@ -1012,6 +1056,8 @@ def letter_write(request_id: int) -> str:
         p = write_letter(_conn(), request_id)
     except KeyError as exc:
         return str(exc)
+    except ValueError as exc:
+        return f"Letter not written: {exc}"
     return f"Letter written to {p}. Post it, then requests_mark {request_id} sent."
 
 
@@ -1026,15 +1072,19 @@ def drop_prepare(subject_id: str) -> str:
         return f"Refused: {exc}"
 
 
-def drop_record(subject_id: str, drop_id: str) -> str:
-    """Record the 8-digit DROP ID after you submitted at DROP, so the cycle is tracked."""
+def drop_record(subject_id: str, drop_id: str, submitted_at: str = "") -> str:
+    """Record the 8-digit DROP ID after you submitted at DROP, so the cycle is tracked.
+    submitted_at (a date) is when you submitted, if that was not today."""
     from unlist.requests.drop import record_drop
 
     try:
-        r = record_drop(_conn(), subject_id, drop_id)
+        r = record_drop(_conn(), subject_id, drop_id, submitted_at.strip() or None)
     except (ConsentError, ValueError) as exc:
         return f"Not recorded: {exc}"
-    return f"DROP ID {r['drop_id']} recorded as request {r['id']}; brokers must act by {r['deadline'][:10]}."
+    return (
+        f"DROP ID {r['drop_id']} recorded as request {r['id']}; reminder to check your DROP "
+        f"status on {r['deadline'][:10]} (an estimate, not a legal deadline for brokers)."
+    )
 
 
 # monitor ----------------------------------------------------------------------------
@@ -1104,8 +1154,9 @@ def reports_list(kind: str = "") -> str:
 
 def report_read(name: str) -> str:
     """Read one report by its path from reports_list (e.g. monitor/2026-11-04_run.md)."""
-    p = (paths.reports_dir() / name).resolve()
-    if not str(p).startswith(str(paths.reports_dir().resolve())) or not p.is_file():
+    base = paths.reports_dir().resolve()
+    p = (base / name).resolve()
+    if not p.is_relative_to(base) or not p.is_file():
         return f"No report {name!r}."
     return p.read_text(encoding="utf-8")
 

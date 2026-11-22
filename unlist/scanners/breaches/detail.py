@@ -17,7 +17,6 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from functools import lru_cache
 from html.parser import HTMLParser
 from urllib.parse import quote, urlsplit
 
@@ -89,6 +88,8 @@ class BreachGroup:
     first_seen: str = ""
     last_seen: str = ""
     account: object | None = None
+    # classes stored on the HIBP hits themselves, used when the catalog entry is unavailable
+    hibp_stored_classes: list[str] = field(default_factory=list, repr=False)
 
     @property
     def id(self) -> int:
@@ -194,14 +195,25 @@ def _stem(name: str) -> str:
 # stored answers -------------------------------------------------------------------------
 
 
-@lru_cache(maxsize=128)
+_JSON_CACHE_MAX = 128
+_json_cache: dict[str, object] = {}
+_index_cache: dict[str, HibpIndex] = {}
+
+
 def _read_json(path: str) -> object:
-    # raw files are write-once and named by their hash, so a path never changes content
+    # Raw files are write-once and named by their hash, so a path never changes content.
+    # Only a successful read is cached: a file that could not be read may be readable later.
+    if path in _json_cache:
+        return _json_cache[path]
     try:
         with open(path, "rb") as fh:
-            return json.loads(fh.read())
+            data = json.loads(fh.read())
     except (OSError, ValueError):
         return None
+    if len(_json_cache) >= _JSON_CACHE_MAX:
+        _json_cache.pop(next(iter(_json_cache)))
+    _json_cache[path] = data
+    return data
 
 
 def _capture_json(conn: sqlite3.Connection, capture_id: int | None) -> object:
@@ -245,7 +257,10 @@ class HibpIndex:
         year = _year(date)
         exact = self.by_name.get(name)
         if exact:
-            return HibpMatch(exact, "name", True)
+            # the same name years apart is another incident: offered, never merged
+            entry_year = _year(exact.get("BreachDate"))
+            agree = year is None or entry_year is None or abs(entry_year - year) <= 1
+            return HibpMatch(exact, "name", agree)
         tries: list[tuple[str, list[dict]]] = []
         for host in (domain, _as_domain(name)):
             if host:
@@ -272,10 +287,17 @@ class HibpIndex:
         return None
 
 
-@lru_cache(maxsize=2)
 def _index_for(path: str) -> HibpIndex:
+    if path in _index_cache:
+        return _index_cache[path]
     data = _read_json(path)
-    return HibpIndex([e for e in data if isinstance(e, dict)] if isinstance(data, list) else [])
+    if not isinstance(data, list):
+        return HibpIndex([])  # unreadable for now: not cached, so a later call retries
+    index = HibpIndex([e for e in data if isinstance(e, dict)])
+    if len(_index_cache) >= 2:
+        _index_cache.pop(next(iter(_index_cache)))
+    _index_cache[path] = index
+    return index
 
 
 def hibp_index(conn: sqlite3.Connection) -> HibpIndex:
@@ -412,28 +434,54 @@ def _fmt_count(n: object) -> str:
         return ""
 
 
-def _group_key(hit: sqlite3.Row, match: HibpMatch | None) -> str:
+def _hit_domain(hit: sqlite3.Row) -> str:
+    host = (hit["domain"] or "").strip().lower().removeprefix("www.")
+    return _as_domain(host) or _as_domain(hit["breach_name"])
+
+
+def _group_key(hit: sqlite3.Row, match: HibpMatch | None, alias_domains: dict | None = None) -> str:
+    """Identity of the incident a hit belongs to.
+
+    Without a confirmed HIBP match the full domain is the identity, so service.com and
+    service.net stay apart. A hit that names no domain joins a domain's group only when
+    exactly one domain with that name was hit in that year (alias_domains).
+    """
     kind = _kind(hit)
     if kind != "breach":
         return f"{kind}:{hit['breach_name']}"
     if match and match.confident:
         return f"hibp:{match.entry['Name']}"
-    year = _year(hit["breach_date"])
-    return f"name:{_stem(hit['breach_name'])}:{year or ''}"
+    year = _year(hit["breach_date"]) or ""
+    stem = _stem(hit["breach_name"])
+    domain = _hit_domain(hit)
+    if not domain:
+        candidates = (alias_domains or {}).get((stem, year), ())
+        if len(candidates) == 1:
+            domain = next(iter(candidates))
+    return f"name:{domain or stem}:{year}"
 
 
 def build_groups(conn: sqlite3.Connection, hits: list[sqlite3.Row]) -> list[BreachGroup]:
     """Group hits into incidents and attach description, data classes, links and advice."""
     index = hibp_index(conn)
     groups: dict[str, BreachGroup] = {}
+    matches: list[HibpMatch | None] = []
+    alias_domains: dict[tuple[str, object], set[str]] = {}
     for hit in hits:
-        kind = _kind(hit)
         match = (
             index.match(hit["breach_name"], hit["domain"] or "", hit["breach_date"])
-            if kind == "breach"
+            if _kind(hit) == "breach"
             else None
         )
-        key = _group_key(hit, match)
+        matches.append(match)
+        domain = _hit_domain(hit)
+        if _kind(hit) == "breach" and domain and not (match and match.confident):
+            # keyed by the domain's own name, which is what a bare name can be compared with
+            slot = (_stem(domain), _year(hit["breach_date"]) or "")
+            alias_domains.setdefault(slot, set()).add(domain)
+    for hit, match in zip(hits, matches, strict=True):
+        kind = _kind(hit)
+        key = _group_key(hit, match, alias_domains)
         g = groups.get(key)
         if g is None:
             g = groups[key] = BreachGroup(
@@ -507,7 +555,10 @@ def _absorb_hit(conn: sqlite3.Connection, g: BreachGroup, hit: sqlite3.Row, kind
             fields = _row_classes(hit)
         _add_once(g.identifier_fields, (hit["identifier_value"], fields))
     elif source == "hibp":
-        pass  # the HIBP entry itself is added once in _finish
+        # the HIBP entry itself is added once in _finish; these stand in when there is none
+        for c in _row_classes(hit):
+            if c.lower() not in {x.lower() for x in g.hibp_stored_classes}:
+                g.hibp_stored_classes.append(c)
     else:  # leakcheck-pro and any later source that reports per breach
         _add_once(g.classes_by_source, (label, _row_classes(hit)))
 
@@ -544,7 +595,9 @@ def _finish(g: BreachGroup) -> None:
         if e.get("IsSpamList"):
             facts.append(("Spam list", "a list used for spam, not a breach of one site"))
         g.facts = [f for f in facts if f[1]] + g.facts
-    elif g.possible_hibp:
+    elif g.hibp_stored_classes:
+        g.classes_by_source.insert(0, (SOURCE_LABELS["hibp"], list(g.hibp_stored_classes)))
+    if not e and g.possible_hibp:
         p = g.possible_hibp
         _add_link(
             g,
