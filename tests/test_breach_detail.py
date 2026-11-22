@@ -143,7 +143,7 @@ def test_dashboard_report_and_connector_show_links(scanned, monkeypatch):
 
     monkeypatch.setenv("UNLIST_NO_NOTIFY", "1")
     li = by_title(D.groups_for(scanned, "me"))["LinkedIn"]
-    with TestClient(create_app()) as client:
+    with TestClient(create_app(), base_url="http://127.0.0.1") as client:
         page = client.get("/subjects/me").text
         assert f'href="/breaches/{li.id}"' in page and "https://haveibeenpwned.com/Breach/LinkedIn" in page
         page = client.get(f"/breaches/{li.id}").text

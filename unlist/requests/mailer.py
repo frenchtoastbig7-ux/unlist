@@ -12,6 +12,24 @@ from email.utils import formatdate, make_msgid
 from unlist import __version__
 
 
+class ConfigError(ValueError):
+    """A mailbox setting in the environment that cannot be used as written."""
+
+
+def env_port(name: str, default: int) -> int:
+    """A TCP port from the environment: the default when unset or empty, else 1-65535."""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        port = int(raw)
+    except ValueError:
+        port = 0
+    if not 1 <= port <= 65535:
+        raise ConfigError(f"{name} must be a port number from 1 to 65535, not {raw!r}")
+    return port
+
+
 @dataclass
 class SmtpSettings:
     host: str
@@ -30,7 +48,7 @@ class SmtpSettings:
             return None
         return cls(
             host=host,
-            port=int(os.environ.get("UNLIST_SMTP_PORT") or 587),
+            port=env_port("UNLIST_SMTP_PORT", 587),
             user=user,
             password=password,
             from_address=os.environ.get("UNLIST_FROM_ADDRESS") or user,
@@ -62,16 +80,25 @@ class Mailer:
         msg = self.build(to, subject, body, tag)
         ctx = ssl.create_default_context()
         if self.s.port == 465:
-            with smtplib.SMTP_SSL(self.s.host, self.s.port, context=ctx, timeout=30) as smtp:
-                smtp.login(self.s.user, self.s.password)
-                smtp.send_message(msg)
+            smtp: smtplib.SMTP = smtplib.SMTP_SSL(self.s.host, self.s.port, context=ctx, timeout=30)
         else:
-            with smtplib.SMTP(self.s.host, self.s.port, timeout=30) as smtp:
+            smtp = smtplib.SMTP(self.s.host, self.s.port, timeout=30)
+        try:
+            if self.s.port != 465:
                 smtp.ehlo()
                 smtp.starttls(context=ctx)
                 smtp.ehlo()
-                smtp.login(self.s.user, self.s.password)
-                smtp.send_message(msg)
+            smtp.login(self.s.user, self.s.password)
+            smtp.send_message(msg)
+        except BaseException:
+            smtp.close()
+            raise
+        # The server has accepted the message. A failed QUIT must not look like a failed
+        # send, or the request would stay approved and go out a second time.
+        try:
+            smtp.quit()
+        except (smtplib.SMTPException, OSError):
+            smtp.close()
         return msg["Message-ID"]
 
 

@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+from urllib.parse import urlsplit
 
 from unlist import paths
 from unlist.catalog import Broker, load_catalog
@@ -62,6 +63,38 @@ def prefill_values(
     return {k: v for k, v in values.items() if v}
 
 
+OPENABLE_STATES = ("drafted", "approved", "awaiting_verification")
+
+
+def _https_host(url: str) -> str | None:
+    """The host of an https URL without userinfo, else None."""
+    try:
+        parts = urlsplit(url or "")
+        host = parts.hostname
+    except ValueError:
+        return None
+    if parts.scheme.lower() != "https" or not host or "@" in parts.netloc:
+        return None
+    return host.lower().removeprefix("www.")
+
+
+def fill_refusal(url: str, final_url: str, broker: Broker) -> str | None:
+    """Why the subject's details must not be typed into this page, or None when they may.
+
+    Both the opt-out URL and the page the browser actually landed on must be https, and
+    the landing page must be the host the opt-out URL names or one of the broker's own
+    hosts: a redirect elsewhere, or plain http, gets nothing filled in."""
+    intended = _https_host(url)
+    if intended is None:
+        return f"the opt-out URL is not https: {url}"
+    landed = _https_host(final_url)
+    if landed is None:
+        return f"the page that opened is not https: {final_url}"
+    if landed != intended and not broker.matches_host(landed):
+        return f"the page redirected to another site: {final_url}"
+    return None
+
+
 def launch_form_assist(request_id: int) -> int:
     """Start the helper as its own process so the browser outlives the MCP tool call."""
     log_dir = paths.data_dir() / "logs"
@@ -89,7 +122,7 @@ def run_form_assist(request_id: int, *, timeout_s: int = 1800, headless: bool = 
     row = engine.get(conn, request_id)
     if row["channel"] != "form":
         return f"request {request_id} is {row['channel']}, not a form"
-    if row["state"] not in ("drafted", "approved", "awaiting_verification"):
+    if row["state"] not in OPENABLE_STATES:
         return f"request {request_id} is {row['state']}; nothing to open"
     subject = SubjectRepo(conn).require(row["subject_id"])
     broker = load_catalog().get(row["broker_id"])
@@ -108,6 +141,9 @@ def run_form_assist(request_id: int, *, timeout_s: int = 1800, headless: bool = 
         page.goto(url, wait_until="domcontentloaded")
         page.wait_for_timeout(2500)
         filled: list[str] = []
+        refusal = fill_refusal(url, page.url, broker)
+        if refusal:
+            playbook = None
         if playbook:
             for key, selector in playbook.fields.items():
                 val = values.get(key)
@@ -137,7 +173,12 @@ def run_form_assist(request_id: int, *, timeout_s: int = 1800, headless: bool = 
             conn,
             request_id,
             "form_prefilled",
-            f"filled {', '.join(filled) or 'nothing (no playbook match)'}; waiting for you",
+            (
+                f"nothing filled: {refusal}; check the address before typing anything"
+                if refusal
+                else f"filled {', '.join(filled) or 'nothing (no playbook match)'}"
+            )
+            + "; waiting for you",
             before_id,
         )
         conn.commit()
@@ -161,14 +202,28 @@ def run_form_assist(request_id: int, *, timeout_s: int = 1800, headless: bool = 
                 break
         after_id = record_browser(conn, "forms", last_cap, note=f"form after, request {request_id}")
         if closed and last_cap is not cap_before:
-            engine.mark_sent(
+            # The window was open for a while: only move a request that is still where it
+            # was when it opened, so a cancellation made meanwhile is not undone.
+            if engine.mark_sent_if(
                 conn,
                 request_id,
                 "submitted",
+                OPENABLE_STATES,
                 f"form submitted in the browser; final page {last_cap.final_url}",
                 after_id,
-            )
-            outcome = "submitted"
+            ):
+                outcome = "submitted"
+            else:
+                state = engine.get(conn, request_id)["state"]
+                engine.add_event(
+                    conn,
+                    request_id,
+                    "form_submitted_late",
+                    f"the form moved on to {last_cap.final_url}, but the request was already "
+                    f"{state}; state left unchanged, evidence kept",
+                    after_id,
+                )
+                outcome = f"form moved on, but the request is {state}; left unchanged"
         elif closed:
             engine.add_event(
                 conn,
@@ -188,20 +243,44 @@ def run_form_assist(request_id: int, *, timeout_s: int = 1800, headless: bool = 
         return outcome
 
 
-def _snapshot(page, requested_url: str):
+def _document_id(page) -> tuple[str, object]:
+    """Identifies the loaded document: its URL and the time its navigation started."""
+    return page.url, page.evaluate("performance.timeOrigin")
+
+
+def _snapshot(page, requested_url: str, attempts: int = 3):
+    """HTML, screenshot, URL and title of one document. If the page navigates while they
+    are being read the parts would describe different documents, so the capture is taken
+    again; if it never holds still, only the HTML and the URL read beside it are kept."""
     from unlist.scanners.brokers.browser import BrowserCapture
 
-    html = page.content()
-    try:
-        png = page.screenshot(full_page=True)
-    except Exception:
-        png = b""
+    html, final_url = "", page.url
+    for _ in range(attempts):
+        try:
+            before = _document_id(page)
+        except Exception:
+            before = None
+        html = page.content()
+        final_url = page.url
+        try:
+            png = page.screenshot(full_page=True)
+        except Exception:
+            png = b""
+        try:
+            title = page.title()
+            stable = before is not None and _document_id(page) == before
+        except Exception:
+            title, stable = "", False
+        if stable:
+            break
+    else:
+        png, title = b"", ""
     return BrowserCapture(
         requested_url=requested_url,
-        final_url=page.url,
+        final_url=final_url,
         status=None,
         html=html.encode("utf-8"),
         png=png,
         captured_at=now_iso(),
-        title=page.title(),
+        title=title,
     )

@@ -22,7 +22,9 @@ def main() -> None:
 def status() -> None:
     """Counts, data directory, credentials present."""
     from unlist.mcp import tools
+    from unlist.mcp.server import _load_dotenv
 
+    _load_dotenv()  # the same environment the other commands run with
     click.echo(tools.status())
 
 
@@ -202,6 +204,13 @@ def monitor_status_cmd() -> None:
     click.echo(tools.monitor_status())
 
 
+def _launchd_loaded(label: str) -> bool:
+    import subprocess
+
+    r = subprocess.run(["launchctl", "list", label], check=False, capture_output=True)
+    return r.returncode == 0
+
+
 @monitor.command("install-launchd")
 @click.option("--hour", default=9, show_default=True)
 @click.option("--minute", default=0, show_default=True)
@@ -222,7 +231,11 @@ def install_launchd(hour: int, minute: int) -> None:
     r = subprocess.run(
         ["launchctl", "load", str(plist)], check=False, capture_output=True, text=True
     )
-    click.echo(f"wrote {plist}; launchctl load: {'ok' if r.returncode == 0 else r.stderr.strip()}")
+    # launchctl load can print an error and still exit 0, so ask launchd as well
+    if r.returncode != 0 or not _launchd_loaded(LAUNCHD_LABEL):
+        why = r.stderr.strip() or r.stdout.strip() or f"exit status {r.returncode}"
+        raise click.ClickException(f"wrote {plist}, but launchctl did not load it: {why}")
+    click.echo(f"wrote {plist}; launchctl load: ok")
     click.echo(
         f"runs `unlist run-due` daily at {hour:02d}:{minute:02d}; "
         f"logs under {paths.data_dir() / 'logs'}"
@@ -238,7 +251,16 @@ def uninstall_launchd() -> None:
 
     plist = Path.home() / "Library" / "LaunchAgents" / f"{LAUNCHD_LABEL}.plist"
     if plist.exists():
-        subprocess.run(["launchctl", "unload", str(plist)], check=False, capture_output=True)
+        r = subprocess.run(
+            ["launchctl", "unload", str(plist)], check=False, capture_output=True, text=True
+        )
+        # A failed unload of a job that was never loaded is fine; one that is still
+        # loaded keeps running, so the plist stays for another attempt.
+        if _launchd_loaded(LAUNCHD_LABEL):
+            why = r.stderr.strip() or r.stdout.strip() or f"exit status {r.returncode}"
+            raise click.ClickException(
+                f"launchctl did not unload {LAUNCHD_LABEL}: {why}. Kept {plist}; try again."
+            )
         plist.unlink()
         click.echo(f"removed {plist}")
     else:

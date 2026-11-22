@@ -12,7 +12,7 @@
 <tr><th>id</th><th>subject</th><th>kind</th><th>status</th><th>what</th><th>identifier</th><th>url</th><th>detail</th><th>last seen</th><th></th></tr>
 {% for r in rows %}
 <tr><td>{{ r.id }}</td><td>{{ r.subject_id }}</td><td>{{ r.kind }}</td><td><span class="tag {{ r.status }}">{{ r.status }}</span></td><td>{{ r.title or r.key }}</td><td>{{ r.identifier_value }}</td>
-<td>{% if r.url %}<a href="{{ r.url }}" target="_blank" rel="noreferrer">{{ r.url|truncate(50) }}</a>{% endif %}</td><td class="muted">{{ r.detail_json|truncate(70) }}</td><td>{{ r.last_seen[:10] }}</td>
+<td>{% if r.url|http_url %}<a href="{{ r.url|http_url }}" target="_blank" rel="noreferrer">{{ r.url|truncate(50) }}</a>{% else %}{{ (r.url or '')|truncate(50) }}{% endif %}</td><td class="muted">{{ r.detail_json|truncate(70) }}</td><td>{{ r.last_seen[:10] }}</td>
 <td style="white-space:nowrap">{% for st, label, cls in (('confirmed', 'mine', ''), ('rejected', 'not me', 'quiet'), ('resolved', 'dealt with', 'quiet')) %}{% if r.status != st %}<form class="inline" method="post" action="/exposures/{{ r.id }}/status"><input type="hidden" name="status" value="{{ st }}"><input type="hidden" name="next" value="/exposures?subject={{ subject }}&kind={{ kind }}&status={{ status }}"><button class="small {{ cls }}">{{ label }}</button></form> {% endif %}{% endfor %}</td></tr>
 {% else %}<tr><td colspan="10" class="muted">No exposures match.</td></tr>{% endfor %}
 </table>

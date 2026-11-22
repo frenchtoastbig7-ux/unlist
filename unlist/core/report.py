@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import itertools
 import re
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from pathlib import Path
 
 from unlist import __version__, paths
-from unlist.core.timeutil import iso_z, local_label, utcnow
+from unlist.core.timeutil import iso_z, local_label, to_utc, utcnow
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
@@ -94,8 +95,21 @@ def write_report(
     data_dir: Path | None = None,
 ) -> Path:
     run_at = run_at or utcnow()
-    path = report_path(tool, slug, run_at, data_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    base = report_path(tool, slug, run_at, data_dir)
+    base.parent.mkdir(parents=True, exist_ok=True)
     content = header(tool, title, params, counts, run_at) + "\n" + body.rstrip() + "\n"
-    path.write_text(content, encoding="utf-8")
-    return path
+    # A report is a record of one run: a second run on the same day gets its own file
+    # (time of day, then a counter) instead of replacing the first one's results.
+    stamped = f"{base.stem}_{to_utc(run_at):%H%M%S}"
+    names = itertools.chain(
+        [base.stem, stamped], (f"{stamped}-{n}" for n in itertools.count(2))
+    )
+    for name in names:
+        path = base.with_name(name + base.suffix)
+        try:
+            with path.open("x", encoding="utf-8") as fh:
+                fh.write(content)
+        except FileExistsError:
+            continue
+        return path
+    raise AssertionError("unreachable")  # pragma: no cover

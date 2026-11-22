@@ -6,6 +6,7 @@ from __future__ import annotations
 import sys
 import threading
 import webbrowser
+from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -40,12 +41,28 @@ def _same_origin(request: Request) -> bool:
     return False
 
 
-def create_app() -> FastAPI:
+# The names the dashboard is served under. A request with any other Host header reached
+# 127.0.0.1 through a hostname someone else controls (DNS rebinding) and is refused.
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def _hostname(host_header: str) -> str:
+    """The host part of a Host header, lowercased, without port or IPv6 brackets."""
+    host = host_header.strip().lower()
+    if host.startswith("["):
+        return host[1:].split("]", 1)[0]
+    return host.rsplit(":", 1)[0] if ":" in host else host
+
+
+def create_app(allowed_hosts: Iterable[str] = LOOPBACK_HOSTS) -> FastAPI:
     app = FastAPI(title="unlist", docs_url=None, redoc_url=None, lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+    allowed = {h.strip().lower().strip("[]") for h in allowed_hosts}
 
     @app.middleware("http")
-    async def csrf_guard(request: Request, call_next):
+    async def guard(request: Request, call_next):
+        if _hostname(request.headers.get("host", "")) not in allowed:
+            return PlainTextResponse("Bad request: unrecognised Host header", status_code=400)
         if request.method == "POST" and not _same_origin(request):
             return PlainTextResponse("Forbidden: cross-site request", status_code=403)
         return await call_next(request)

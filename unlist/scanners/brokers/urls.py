@@ -83,7 +83,6 @@ class Profile:
     def from_subject(cls, subject: Subject, today: date | None = None) -> Profile:
         p = cls()
         seen_names: set[tuple[str, str]] = set()
-        seen_places: set[tuple[str, str]] = set()
         # Current names and addresses first: the places they carry are searched first.
         order = {"name": 0, "alias": 1, "address": 2}
         idents = sorted(
@@ -100,9 +99,8 @@ class Profile:
                 city = str(ident.meta.get("city") or "").strip()
                 state = str(ident.meta.get("state") or "").strip().upper()
                 zip_ = str(ident.meta.get("zip") or "").strip()
-                if (city or state) and (city.lower(), state) not in seen_places:
-                    seen_places.add((city.lower(), state))
-                    p.places.append(Place(city=city, state=state, zip=zip_))
+                if city or state:
+                    _add_place(p.places, Place(city=city, state=state, zip=zip_))
             elif ident.kind == "dob":
                 try:
                     born = date.fromisoformat(ident.value)
@@ -130,6 +128,26 @@ class Profile:
         return p
 
 
+def _add_place(places: list[Place], new: Place) -> None:
+    """Add a place unless it is already there. The same city and state with and without
+    a ZIP are one place (the ZIP is kept); two different ZIPs stay two places."""
+    same = [
+        i
+        for i, p in enumerate(places)
+        if (p.city.lower(), p.state) == (new.city.lower(), new.state)
+    ]
+    if not same:
+        places.append(new)
+    elif not new.zip or any(places[i].zip == new.zip for i in same):
+        return
+    else:
+        blank = next((i for i in same if not places[i].zip), None)
+        if blank is None:
+            places.append(new)
+        else:
+            places[blank] = Place(city=places[blank].city, state=places[blank].state, zip=new.zip)
+
+
 def _joiner(template: str) -> str | None:
     """The character a template uses between name parts, e.g. '-' in '{first}-{last}'."""
     m = re.search(r"\{first\}([-_+])\{", template)
@@ -139,7 +157,9 @@ def _joiner(template: str) -> str | None:
 def _encode(value: str, joiner: str | None) -> str:
     value = value.strip()
     if joiner:
-        return re.sub(r"\s+", joiner, value)
+        # quote after joining, keeping the joiner itself: a "/" or "?" in a name must
+        # not become URL structure
+        return quote(re.sub(r"\s+", joiner, value), safe=joiner)
     return quote(value, safe="")
 
 
@@ -198,8 +218,11 @@ def build_phone_urls(broker: Broker, profile: Profile) -> list[tuple[str, dict[s
         return []
     out: list[tuple[str, dict[str, str]]] = []
     for number in profile.phones:
-        digits = number[-10:]
+        digits = re.sub(r"\D", "", number)
+        if len(digits) == 11 and digits.startswith("1"):
+            digits = digits[1:]
         if len(digits) != 10:
+            # not a US number; its last ten digits would be someone else's
             continue
         area, prefix, line = digits[:3], digits[3:6], digits[6:]
         values = {

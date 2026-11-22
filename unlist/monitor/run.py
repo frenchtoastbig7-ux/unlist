@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import sqlite3
 import subprocess
 from dataclasses import dataclass, field
@@ -59,6 +60,12 @@ GENERIC_ESCALATION = (
 )
 
 
+# Longer than this cannot be added to a date (and no job needs it).
+MAX_INTERVAL_SECONDS = 5 * 366 * 86400
+# A run that died holding a job stops blocking it after this long.
+CLAIM_STALE_AFTER = timedelta(hours=6)
+
+
 @dataclass
 class RunSummary:
     ran: list[str] = field(default_factory=list)
@@ -87,12 +94,34 @@ def _due(conn: sqlite3.Connection, name: str, force: bool) -> bool:
     if force:
         return True
     row = conn.execute("SELECT last_run FROM jobs WHERE name=?", (name,)).fetchone()
-    return is_due(row["last_run"] if row else None, interval)
+    try:
+        return is_due(row["last_run"] if row else None, interval)
+    except OverflowError:
+        return False  # an interval too large to schedule; jobs_status says so
+
+
+def _claim(conn: sqlite3.Connection, name: str) -> bool:
+    """Take the job for this run, atomically: False when another run holds it. A claim
+    older than CLAIM_STALE_AFTER was left by a run that died and is taken over."""
+    _job_interval(conn, name)
+    stale = iso_z(utcnow() - CLAIM_STALE_AFTER)
+    cur = conn.execute(
+        "UPDATE jobs SET claimed_at=? WHERE name=? AND (claimed_at IS NULL OR claimed_at < ?)",
+        (now_iso(), name, stale),
+    )
+    conn.commit()
+    return cur.rowcount == 1
+
+
+def _release(conn: sqlite3.Connection, name: str) -> None:
+    conn.execute("UPDATE jobs SET claimed_at=NULL WHERE name=?", (name,))
+    conn.commit()
 
 
 def _done(conn: sqlite3.Connection, name: str, result: str) -> None:
     conn.execute(
-        "UPDATE jobs SET last_run=?, last_result=? WHERE name=?", (now_iso(), result[:500], name)
+        "UPDATE jobs SET last_run=?, last_result=?, claimed_at=NULL WHERE name=?",
+        (now_iso(), result[:500], name),
     )
     conn.commit()
 
@@ -101,6 +130,11 @@ def set_interval(conn: sqlite3.Connection, name: str, interval: str) -> None:
     if name not in JOBS:
         raise ValueError(f"unknown job {name!r}; one of {', '.join(JOBS)}")
     seconds = parse_interval(interval)
+    if seconds > MAX_INTERVAL_SECONDS:
+        raise ValueError(
+            f"interval {interval!r} is too long; the longest is "
+            f"{format_interval(MAX_INTERVAL_SECONDS)}"
+        )
     conn.execute(
         "INSERT INTO jobs(name, interval_seconds) VALUES (?,?) "
         "ON CONFLICT(name) DO UPDATE SET interval_seconds=excluded.interval_seconds",
@@ -121,7 +155,10 @@ def jobs_status(conn: sqlite3.Connection) -> list[list[object]]:
         if last:
             dt = parse_dt(last)
             if dt:
-                nxt = iso_z(dt + timedelta(seconds=interval))
+                try:
+                    nxt = iso_z(dt + timedelta(seconds=interval))
+                except OverflowError:
+                    nxt = "never: interval too long, set it again"
         rows.append(
             [
                 name,
@@ -175,8 +212,23 @@ def run_due(
             if not _due(conn, name, force):
                 s.skipped.append(name)
                 continue
+            # force overrides the schedule, never a run that is in the middle of the job.
+            if not _claim(conn, name):
+                s.skipped.append(name)
+                s.problems.append(f"{name}: another run is doing this job now; skipped")
+                continue
+            if not _due(conn, name, force):  # that other run finished it just before the claim
+                _release(conn, name)
+                s.skipped.append(name)
+                continue
             s.ran.append(name)
-            _JOB_FUNCS[name](conn, subjects, s, browser)
+            try:
+                _JOB_FUNCS[name](conn, subjects, s, browser)
+            except Exception as exc:
+                # One job failing must not cost the later jobs, the report or the audit.
+                conn.rollback()
+                s.problems.append(f"{name}: {exc}")
+                _done(conn, name, f"error: {exc}")
     finally:
         if browser is not None:
             browser.close()
@@ -218,10 +270,15 @@ def _job_verify(conn, subjects, s: RunSummary, browser) -> None:
             except Exception as exc:
                 s.problems.append(f"verify {row['id']}: {exc}")
                 continue
-            if verdict == "gone" and row["status"] != "removed":
-                gone += 1
-                s.changes.append(f"{subj.id}: listing {row['id']} at {row['broker_id']} is gone")
+            if verdict == "gone":
+                # Reconcile on every gone verdict: a run that stopped after the listing was
+                # marked removed but before its request was closed is finished here.
                 _close_requests_for_finding(conn, row["id"])
+                if row["status"] != "removed":
+                    gone += 1
+                    s.changes.append(
+                        f"{subj.id}: listing {row['id']} at {row['broker_id']} is gone"
+                    )
             elif verdict == "present" and row["status"] == "removed":
                 back += 1
                 s.changes.append(f"{subj.id}: listing {row['id']} at {row['broker_id']} REAPPEARED")
@@ -235,9 +292,17 @@ def _close_requests_for_finding(conn, finding_id: int) -> None:
         fids = json.loads(r["finding_ids_json"] or "[]")
         if finding_id not in fids or r["state"] not in engine.SENT_STATES:
             continue
-        remaining = [f for f in fids if F.get(conn, f)["status"] != "removed"]
-        if not remaining:
-            engine.set_state(conn, r["id"], "verified_removed", "every listing verified gone")
+        if all(_finding_gone(conn, f) for f in fids):
+            engine.transition(
+                conn, r["id"], "verified_removed", engine.SENT_STATES, "every listing verified gone"
+            )
+
+
+def _finding_gone(conn, finding_id: int) -> bool:
+    try:
+        return F.get(conn, finding_id)["status"] == "removed"
+    except KeyError:
+        return True  # the finding was deleted; nothing is left to wait for
 
 
 def _job_brokers(conn, subjects, s: RunSummary, browser) -> None:
@@ -272,17 +337,31 @@ def _escalation_for(subj) -> str:
     return ESCALATION.get(key, GENERIC_ESCALATION)
 
 
+_AWAITING = ("sent", "submitted", "awaiting_verification", "acknowledged")
+
+
 def _job_deadlines(conn, _subjects, s: RunSummary, _browser) -> None:
     now = now_iso()
     n = 0
     repo = SubjectRepo(conn)
     for r in engine.list_for(conn, None, "open"):
-        if r["state"] not in ("sent", "submitted", "awaiting_verification", "acknowledged"):
+        if r["state"] not in _AWAITING:
             continue
         if r["channel"] == "drop" or not r["deadline"] or r["deadline"] > now:
             continue
         advice = _escalation_for(repo.get(r["subject_id"]))
-        engine.set_state(conn, r["id"], "overdue", f"deadline {r['deadline'][:10]} passed")
+        # Only if the request is still as it was read: one completed, cancelled or given a
+        # new deadline in the meantime is not reopened as overdue.
+        if not engine.transition(
+            conn,
+            r["id"],
+            "overdue",
+            _AWAITING,
+            f"deadline {r['deadline'][:10]} passed",
+            if_deadline=r["deadline"],
+            commit=False,
+        ):
+            continue
         engine.add_event(conn, r["id"], "escalation_note", advice)
         conn.commit()
         s.changes.append(f"request {r['id']} ({r['broker_id']}) is overdue; escalation note added")
@@ -298,7 +377,9 @@ def _job_drop(conn, _subjects, s: RunSummary, _browser) -> None:
             continue
         due = parse_dt(r["deadline"])
         if due and due <= now:
-            nxt = iso_z(due + timedelta(days=45))
+            while due <= now:  # a submission recorded late can be several cycles behind
+                due += timedelta(days=45)
+            nxt = iso_z(due)
             conn.execute("UPDATE requests SET deadline=? WHERE id=?", (nxt, r["id"]))
             engine.add_event(
                 conn,
@@ -335,23 +416,33 @@ def _job_followups(conn, subjects, s: RunSummary, _browser) -> None:
 def _job_inbox(conn, _subjects, s: RunSummary, _browser) -> None:
     from unlist.requests.inbox import ImapInbox, ImapSettings, process_messages
 
-    settings = ImapSettings.from_env()
-    if settings is None:
-        _done(conn, "inbox", "not configured")
-        return
+    results: list[dict] = []
+    unflagged: list[str] = []
     try:
+        settings = ImapSettings.from_env()  # a bad port is this job's problem, not the run's
+        if settings is None:
+            _done(conn, "inbox", "not configured")
+            return
         with ImapInbox(settings) as inbox:
             messages = inbox.fetch_unseen()
             results = process_messages(conn, messages)
-            for m in messages:
-                inbox.mark_seen(m.uid)
+            unflagged = inbox.mark_seen_all([m.uid for m in messages])
     except Exception as exc:
+        conn.rollback()
         s.problems.append(f"inbox: {exc}")
-        _done(conn, "inbox", f"error: {exc}")
-        return
+        error = f"error: {exc}"
+    else:
+        error = ""
     for r in results:
         s.changes.append(f"mail from {r['from']}: {r['kind']}; {r['action']}")
-    _done(conn, "inbox", f"{len(results)} message(s)")
+    s.problems.extend(f"inbox: {u}" for u in unflagged)
+    _done(
+        conn,
+        "inbox",
+        error
+        or f"{len(results)} message(s)"
+        + (f", {len(unflagged)} could not be marked seen" if unflagged else ""),
+    )
 
 
 def _job_send_queue(conn, _subjects, s: RunSummary, _browser) -> None:
@@ -361,7 +452,12 @@ def _job_send_queue(conn, _subjects, s: RunSummary, _browser) -> None:
     if not waiting:
         _done(conn, "send_queue", "nothing approved")
         return
-    settings = SmtpSettings.from_env()
+    try:
+        settings = SmtpSettings.from_env()
+    except ValueError as exc:
+        s.problems.append(f"send: {exc}")
+        _done(conn, "send_queue", f"error: {exc}")
+        return
     if settings is None:
         _done(conn, "send_queue", f"{len(waiting)} approved, no mailbox configured")
         s.problems.append(f"{len(waiting)} approved email request(s) wait for a mailbox in .env")
@@ -497,27 +593,15 @@ LAUNCHD_LABEL = "inc.sovereignedge.unlist"
 
 
 def launchd_plist(repo_dir: str, uv_path: str, hour: int = 9, minute: int = 0) -> str:
+    """The LaunchAgent as a property list. Serialised, not interpolated, so a path with
+    `&` or `<` in it still gives a file launchd can read."""
     data_dir = str(paths.data_dir())
-    return f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>{LAUNCHD_LABEL}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>{uv_path}</string>
-    <string>--directory</string>
-    <string>{repo_dir}</string>
-    <string>run</string>
-    <string>unlist</string>
-    <string>run-due</string>
-  </array>
-  <key>EnvironmentVariables</key>
-  <dict><key>UNLIST_DATA_DIR</key><string>{data_dir}</string></dict>
-  <key>StartCalendarInterval</key>
-  <dict><key>Hour</key><integer>{hour}</integer><key>Minute</key><integer>{minute}</integer></dict>
-  <key>StandardOutPath</key><string>{data_dir}/logs/launchd.out</string>
-  <key>StandardErrorPath</key><string>{data_dir}/logs/launchd.err</string>
-</dict>
-</plist>
-"""
+    job = {
+        "Label": LAUNCHD_LABEL,
+        "ProgramArguments": [uv_path, "--directory", repo_dir, "run", "unlist", "run-due"],
+        "EnvironmentVariables": {"UNLIST_DATA_DIR": data_dir},
+        "StartCalendarInterval": {"Hour": int(hour), "Minute": int(minute)},
+        "StandardOutPath": f"{data_dir}/logs/launchd.out",
+        "StandardErrorPath": f"{data_dir}/logs/launchd.err",
+    }
+    return plistlib.dumps(job, sort_keys=False).decode("utf-8")

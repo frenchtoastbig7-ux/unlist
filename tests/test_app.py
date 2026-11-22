@@ -15,7 +15,8 @@ ORIGIN = {"origin": "http://testserver", "host": "testserver"}
 @pytest.fixture
 def client(data_dir, monkeypatch):
     monkeypatch.setenv("UNLIST_NO_NOTIFY", "1")
-    with TestClient(create_app()) as c:
+    # the test client's host is allowed here only; the app itself serves loopback names
+    with TestClient(create_app(allowed_hosts=("testserver",))) as c:
         yield c
 
 
@@ -38,8 +39,20 @@ def test_pages_render_empty(client):
         assert r.status_code == 200, path
     assert client.get("/subjects/nope").status_code == 404
     assert client.get("/catalog/nope").status_code == 404
-    assert client.get("/reports/monitor/../../etc/passwd").status_code in (404, 200)
-    assert "passwd" not in client.get("/reports/monitor/..%2F..%2Fetc%2Fpasswd").text or True
+
+
+def test_reports_stay_inside_the_reports_directory(client, data_dir):
+    reports = data_dir / "reports"
+    (reports / "monitor").mkdir(parents=True)
+    (reports / "monitor" / "run.md").write_text("# a real report", encoding="utf-8")
+    # a sibling whose path merely starts with the reports directory's path
+    (data_dir / "reports-old.md").write_text("OUTSIDE-SENTINEL", encoding="utf-8")
+    assert "a real report" in client.get("/reports/monitor/run.md").text
+    r = client.get("/reports/%2e%2e/reports-old.md")
+    # the handler's own refusal, not a routing or URL-normalisation 404
+    assert (r.status_code, r.text) == (404, "no such report")
+    r = client.get("/reports/monitor/missing.md")
+    assert (r.status_code, r.text) == (404, "no such report")
 
 
 def test_cross_site_posts_are_refused(client):
@@ -47,7 +60,8 @@ def test_cross_site_posts_are_refused(client):
     assert r.status_code == 403
     r = client.post("/subjects", data={"id": "x", "label": "x"}, headers={"origin": "http://evil.example", "host": "testserver"})
     assert r.status_code == 403
-    r = client.post("/subjects", data={"id": "x", "label": "x"}, headers={"sec-fetch-site": "cross-site"})
+    # a valid Origin, so only the Fetch Metadata check can be what refuses this one
+    r = client.post("/subjects", data={"id": "x", "label": "x"}, headers={**ORIGIN, "sec-fetch-site": "cross-site"})
     assert r.status_code == 403
 
 
@@ -96,6 +110,8 @@ def test_jobs_run_in_background(client, conn, monkeypatch):
             break
         time.sleep(0.1)
     assert "done" in page and "ran: deadlines" in page
+    for name in ("UNLIST_SMTP_HOST", "UNLIST_SMTP_USER", "UNLIST_SMTP_PASSWORD"):
+        monkeypatch.delenv(name, raising=False)
     r = client.post("/requests/send", data={}, headers=ORIGIN, follow_redirects=False)
     jid = int(r.headers["location"].rsplit("/", 1)[1])
     for _ in range(50):

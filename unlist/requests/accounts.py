@@ -19,6 +19,7 @@ from unlist.subjects import SubjectRepo
 
 GOOGLE_RESULTS_URL = "https://myactivity.google.com/results-about-you"
 GOOGLE_HELP_URL = "https://support.google.com/websearch/answer/12719076"
+_UNSUBMITTED = ("drafted", "approved")
 
 
 @dataclass
@@ -38,14 +39,20 @@ def cleanup_plan(conn: sqlite3.Connection, subject_id: str) -> list[CleanupItem]
     """Confirmed accounts and breached services, each with how to delete the account."""
     SubjectRepo(conn).require(subject_id)
     directory = load_accounts()
-    items: dict[str, CleanupItem] = {}
+    items: list[CleanupItem] = []
+    # Breach evidence is tied to an account through the directory's canonical service, so
+    # "GitHub (User)" and a GitHub breach meet; two confirmed profiles stay two items.
+    by_service: dict[str, list[CleanupItem]] = {}
     for e in X.list_for(conn, subject_id, "account", "confirmed"):
         host = urlsplit(e["url"] or "").netloc
         svc = directory.find(name=e["title"] or e["key"], host=host)
-        items[(e["title"] or e["key"]).lower()] = _item(
+        item = _item(
             e["title"] or e["key"], "account you confirmed", e["identifier_value"], e["url"] or "",
             svc, e["id"],
         )  # fmt: skip
+        items.append(item)
+        if svc is not None:
+            by_service.setdefault(svc.name.lower(), []).append(item)
     rows = conn.execute(
         "SELECT DISTINCT breach_name, title, domain, identifier_value FROM breach_hits "
         "WHERE subject_id=? AND kind='breach'",
@@ -57,14 +64,15 @@ def cleanup_plan(conn: sqlite3.Connection, subject_id: str) -> list[CleanupItem]
         if svc is None:
             continue  # a compilation or a defunct service: no account to delete
         key = svc.name.lower()
-        if key in items:
-            items[key].why += "; also breached"
+        if key in by_service:
+            for item in by_service[key]:
+                if "breached" not in item.why:
+                    item.why += "; also breached"
             continue
-        items[key] = _item(svc.name, "breached service", h["identifier_value"], "", svc, None)
-    return sorted(
-        items.values(),
-        key=lambda i: (DIFFICULTY_ORDER.get(i.difficulty, 5), i.service.lower()),
-    )
+        item = _item(svc.name, "breached service", h["identifier_value"], "", svc, None)
+        items.append(item)
+        by_service[key] = [item]
+    return sorted(items, key=lambda i: (DIFFICULTY_ORDER.get(i.difficulty, 5), i.service.lower()))
 
 
 def _item(name, why, identifier, profile_url, svc: AccountService | None, eid) -> CleanupItem:
@@ -106,6 +114,7 @@ def draft_account_request(conn: sqlite3.Connection, subject_id: str, service: st
     basis = get_basis(basis_key)
     tag = engine._new_tag(conn)
     usernames = [i.value for i in subject.of_kind("username")]
+    emails = [i.value for i in subject.of_kind("email") if i.current]
     sentence = _BASIS_SENTENCE.get(basis_key, "")
     if basis_key.startswith("state_"):
         sentence = (
@@ -117,11 +126,11 @@ def draft_account_request(conn: sqlite3.Connection, subject_id: str, service: st
             broker_name=svc.name,
             basis_sentence=sentence,
             usernames=usernames,
-            emails=[i.value for i in subject.of_kind("email") if i.current],
+            emails=emails,
             names=[i.value for i in subject.of_kind("name")] or [subject.label],
             tag=tag,
             agent=subject.kind == "household",
-            agent_instrument=subject.consent.instrument if subject.consent else "",
+            reply_email=engine._from_address() or (emails[0] if emails else ""),
             signature=subject.label,
         )
         .strip()
@@ -161,6 +170,13 @@ def google_results_prepare(conn: sqlite3.Connection, subject_id: str) -> tuple[s
     for e in X.list_for(conn, subject_id, "mention", "confirmed"):
         if e["url"] and e["url"] not in urls:
             urls.append(e["url"])
+    # A request already submitted keeps the list that was submitted; only a draft is
+    # refreshed, and URLs found since go into a draft of their own.
+    open_rows = engine.list_for(conn, subject_id, "open", "google-results")
+    draft = next((r for r in open_rows if r["state"] in _UNSUBMITTED), None)
+    submitted = [r for r in open_rows if r["state"] not in _UNSUBMITTED]
+    already = {u for r in submitted for u in json.loads(r["listings_json"] or "[]")}
+    pending = [u for u in urls if u not in already]
     lines = [
         "# Google: Results about you",
         "",
@@ -173,27 +189,35 @@ def google_results_prepare(conn: sqlite3.Connection, subject_id: str) -> tuple[s
         "do that. Do both.",
         "",
     ]
-    lines += [f"- {u}" for u in urls] or ["- (no confirmed listings or mentions yet)"]
+    if pending:
+        lines += [f"- {u}" for u in pending]
+    elif submitted:
+        lines.append("- (nothing new since the last submission)")
+    else:
+        lines.append("- (no confirmed listings or mentions yet)")
+    if submitted:
+        ids = ", ".join(str(r["id"]) for r in submitted)
+        lines += ["", f"Already submitted and not repeated here: request {ids}."]
     lines += ["", f"There is no API for this; details: {GOOGLE_HELP_URL}"]
     text = "\n".join(lines)
-    row = engine.open_for_broker(conn, subject_id, "google-results")
-    if row is None:
-        tag = engine._new_tag(conn)
-        cur = conn.execute(
-            """INSERT INTO requests(subject_id, broker_id, channel, basis, state, tag, form_url,
-                 subject_line, body, listings_json, finding_ids_json, created_at, note)
-               VALUES (?, 'google-results', 'manual', 'plain', 'drafted', ?, ?, ?, ?, ?, '[]', ?, ?)""",
-            (subject_id, tag, GOOGLE_RESULTS_URL, "Google Results about you", text,
-             json.dumps(urls), now_iso(), "submit by hand, then mark it submitted"),
-        )  # fmt: skip
-        engine.add_event(conn, int(cur.lastrowid), "drafted", "manual / google results")
-        conn.commit()
-        row = engine.get(conn, int(cur.lastrowid))
-    else:
+    if draft is not None:
         conn.execute(
-            "UPDATE requests SET body=?, listings_json=? WHERE id=?",
-            (text, json.dumps(urls), row["id"]),
+            "UPDATE requests SET body=?, listings_json=? WHERE id=? "
+            "AND state IN ('drafted','approved')",
+            (text, json.dumps(pending), draft["id"]),
         )
         conn.commit()
-        row = engine.get(conn, row["id"])
-    return text, row
+        return text, engine.get(conn, draft["id"])
+    if submitted and not pending:
+        return text, submitted[-1]
+    tag = engine._new_tag(conn)
+    cur = conn.execute(
+        """INSERT INTO requests(subject_id, broker_id, channel, basis, state, tag, form_url,
+             subject_line, body, listings_json, finding_ids_json, created_at, note)
+           VALUES (?, 'google-results', 'manual', 'plain', 'drafted', ?, ?, ?, ?, ?, '[]', ?, ?)""",
+        (subject_id, tag, GOOGLE_RESULTS_URL, "Google Results about you", text,
+         json.dumps(pending), now_iso(), "submit by hand, then mark it submitted"),
+    )  # fmt: skip
+    engine.add_event(conn, int(cur.lastrowid), "drafted", "manual / google results")
+    conn.commit()
+    return text, engine.get(conn, int(cur.lastrowid))

@@ -6,6 +6,7 @@ import json
 import sqlite3
 from datetime import date
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
@@ -33,6 +34,31 @@ TEMPLATES.env.globals.update(
 )
 
 
+def http_url(value: object) -> str:
+    """The value if it is an http(s) URL, else ''. Every stored or scraped URL goes
+    through this before it becomes an href, so a javascript: or data: link is never live."""
+    text = str(value or "").strip()
+    try:
+        scheme = urlsplit(text).scheme.lower()
+    except ValueError:
+        return ""
+    return text if scheme in ("http", "https") else ""
+
+
+TEMPLATES.env.filters["http_url"] = http_url
+
+
+def parse_ids(text: str) -> list[int]:
+    """Ids separated by commas or spaces. Any token that is not a plain number is an
+    error: a mistyped selection must never quietly shrink or widen to something else."""
+    out = []
+    for token in text.replace(",", " ").split():
+        if not (token.isascii() and token.isdigit()):
+            raise ValueError(f"{token!r} is not a numeric id")
+        out.append(int(token))
+    return out
+
+
 def conn() -> sqlite3.Connection:
     return open_db()
 
@@ -57,10 +83,13 @@ def runner(request: Request) -> JobRunner:
 def _consent_state(s: Subject) -> str:
     if s.consent is None:
         return "none"
+    today = date.today()
     try:
-        s.consent.check(date.today())
+        s.consent.check(today)
         return f"until {s.consent.expires}"
     except ConsentError:
+        if today < s.consent.granted:
+            return f"NOT YET IN FORCE (starts {s.consent.granted})"
         return f"EXPIRED {s.consent.expires}"
 
 
@@ -416,7 +445,12 @@ def findings_verify(request: Request, ids: str = Form(...), use_browser: str = F
     from unlist.scanners.brokers import verify_finding
     from unlist.scanners.brokers.browser import BrowserSession, BrowserUnavailable
 
-    fids = [int(x) for x in ids.replace(",", " ").split() if x.isdigit()]
+    try:
+        fids = parse_ids(ids)
+    except ValueError as exc:
+        return back("/findings", f"Nothing verified: {exc}.")
+    if not fids:
+        return back("/findings", "Nothing verified: no finding ids given.")
 
     def job(ctx: JobContext) -> str:
         browser = None
@@ -560,6 +594,8 @@ def requests_draft_blind(
     only_registry: str = Form("1"),
     limit: int = Form(25),
 ):
+    if limit <= 0:
+        return back("/requests", "Not drafted: limit must be at least 1.")
     try:
         rows = engine.draft_blind(
             conn(),
@@ -604,10 +640,17 @@ def request_state(request: Request, rid: int, state: str = Form(...), note: str 
 def requests_send(request: Request, ids: str = Form("")):
     from unlist.requests.mailer import Mailer, SmtpSettings
 
-    chosen = [int(x) for x in ids.replace(",", " ").split() if x.isdigit()] or None
+    try:
+        chosen = parse_ids(ids) or None  # blank, and only blank, means every approved one
+    except ValueError as exc:
+        return back("/requests", f"Nothing sent: {exc}.")
 
     def job(ctx: JobContext) -> str:
-        settings = SmtpSettings.from_env()
+        try:
+            settings = SmtpSettings.from_env()
+        except ValueError as exc:
+            ctx.log(f"mailbox settings: {exc}")
+            return "nothing sent: mailbox settings are invalid"
         if settings is None:
             ctx.log(
                 "no mailbox configured: set UNLIST_SMTP_HOST, UNLIST_SMTP_USER, UNLIST_SMTP_PASSWORD in .env"
@@ -648,6 +691,8 @@ def request_letter(request: Request, rid: int):
         p = write_letter(conn(), rid)
     except KeyError:
         return back("/requests", "no such request")
+    except ValueError as exc:
+        return back(f"/requests/{rid}", f"Letter not written: {exc}")
     return back(f"/requests/{rid}", f"Letter written to {p}")
 
 
@@ -660,7 +705,11 @@ def inbox(request: Request):
 
     c = conn()
     rows = c.execute("SELECT * FROM inbox_messages ORDER BY id DESC LIMIT 100").fetchall()
-    return render(request, "inbox.html", rows=rows, configured=ImapSettings.from_env() is not None)
+    try:
+        configured = ImapSettings.from_env() is not None
+    except ValueError:  # a bad port in .env; the poll job reports it
+        configured = True
+    return render(request, "inbox.html", rows=rows, configured=configured)
 
 
 @router.post("/inbox/poll")
@@ -668,17 +717,22 @@ def inbox_poll(request: Request):
     from unlist.requests.inbox import ImapInbox, ImapSettings, process_messages
 
     def job(ctx: JobContext) -> str:
-        settings = ImapSettings.from_env()
+        try:
+            settings = ImapSettings.from_env()
+        except ValueError as exc:
+            ctx.log(f"mailbox settings: {exc}")
+            return "mailbox settings are invalid"
         if settings is None:
             ctx.log("no mailbox configured (UNLIST_IMAP_HOST)")
             return "not configured"
         with ImapInbox(settings) as box:
             messages = box.fetch_unseen()
             results = process_messages(ctx.conn, messages)
-            for m in messages:
-                box.mark_seen(m.uid)
+            unflagged = box.mark_seen_all([m.uid for m in messages])
         for r in results:
             ctx.log(f"{r['from']}: {r['kind']}; {r['action']}")
+        for line in unflagged:  # processed and recorded, so not replayed; only still unread
+            ctx.log(f"could not mark as read: {line}")
         return f"{len(results)} message(s)"
 
     jid = runner(request).submit("poll inbox", job)
@@ -745,7 +799,7 @@ def monitor_interval(request: Request, job: str = Form(...), interval: str = For
 def report_read(request: Request, tool: str, name: str):
     base = paths.reports_dir().resolve()
     p = (base / tool / name).resolve()
-    if not str(p).startswith(str(base)) or not p.is_file():
+    if not p.is_relative_to(base) or not p.is_file():
         return PlainTextResponse("no such report", status_code=404)
     return render(
         request,

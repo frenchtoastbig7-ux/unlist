@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from urllib.parse import quote
 
@@ -11,6 +12,7 @@ from unlist.core.fetch import Fetcher, FetchResult
 
 API = "https://haveibeenpwned.com/api/v3"
 PWNED_RANGE = "https://api.pwnedpasswords.com/range/"
+_RANGE_LINE = re.compile(r"^[0-9A-Fa-f]{35}:\d+$")
 
 
 @dataclass
@@ -56,12 +58,16 @@ class HibpClient:
         return h
 
     def all_breaches(self) -> tuple[FetchResult, dict[str, Breach]]:
-        """Every breach HIBP knows about (no key needed). Keyed by Name."""
-        r = self.fetcher.get(f"{API}/breaches", check_robots=False, headers=self._headers())
+        """Every breach HIBP knows about. Keyed by Name. Public, so the key is never sent."""
+        r = self.fetcher.get(
+            f"{API}/breaches", check_robots=False, headers={"Accept": "application/json"}
+        )
         out: dict[str, Breach] = {}
         if r.ok:
             try:
                 for d in json.loads(r.body):
+                    if not isinstance(d, dict):
+                        continue
                     b = Breach.from_api(d)
                     if b.name:
                         out[b.name] = b
@@ -80,7 +86,7 @@ class HibpClient:
             return r, None
         try:
             return r, [Breach.from_api(d) for d in json.loads(r.body)]
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, AttributeError):
             return r, None
 
     def subscription(self) -> tuple[FetchResult, dict | None]:
@@ -93,6 +99,8 @@ class HibpClient:
         try:
             d = json.loads(r.body)
         except (ValueError, TypeError):
+            return r, None
+        if not isinstance(d, dict):
             return r, None
         name = str(d.get("SubscriptionName") or "")
         return r, {
@@ -116,6 +124,8 @@ class HibpClient:
         try:
             items = json.loads(r.body)
         except (ValueError, TypeError):
+            return r, None
+        if not isinstance(items, list) or not all(isinstance(p, dict) for p in items):
             return r, None
         out = []
         for p in items:
@@ -148,6 +158,8 @@ class HibpClient:
             domains = json.loads(r.body)
         except (ValueError, TypeError):
             return r, None
+        if not isinstance(domains, list):
+            return r, None
         return r, [
             Breach(
                 name=str(d), title=f"Stealer log: {d}", domain=str(d), data_classes=["Passwords"]
@@ -165,14 +177,13 @@ class HibpClient:
         )
         if not r.ok:
             return r, None
-        for line in r.body.decode("utf-8", "replace").splitlines():
-            line = line.strip()
-            if ":" not in line:
-                continue
+        # A range answer is lines of "<35 hex characters>:<count>" and nothing else. An
+        # empty body or an HTML page is not "this password is unknown", so it is no answer.
+        lines = [x.strip() for x in r.body.decode("utf-8", "replace").splitlines() if x.strip()]
+        if not lines or not all(_RANGE_LINE.match(x) for x in lines):
+            return r, None
+        for line in lines:
             s, count = line.split(":", 1)
-            if s.strip().upper() == suffix:
-                try:
-                    return r, int(count.strip())
-                except ValueError:
-                    return r, None
+            if s.upper() == suffix:
+                return r, int(count)
         return r, 0

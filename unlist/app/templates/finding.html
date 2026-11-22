@@ -2,7 +2,7 @@
 {% block body %}
 <h1>Finding {{ r.id }} <span class="tag {{ r.status }}">{{ r.status }}</span></h1>
 <p><b>{{ r.broker_id }}</b> · <a href="/catalog/{{ r.broker_id }}">catalog entry</a> · subject <a href="/subjects/{{ r.subject_id }}">{{ r.subject_id }}</a> · score {{ r.score }} ({{ ex.reasons|join(', ') }})</p>
-<p>Listing: <a href="{{ r.listing_url }}" target="_blank" rel="noreferrer">{{ r.listing_url }}</a></p>
+<p>Listing: {% if r.listing_url|http_url %}<a href="{{ r.listing_url|http_url }}" target="_blank" rel="noreferrer">{{ r.listing_url }}</a>{% else %}{{ r.listing_url }} <span class="muted">(not a web address; not linked)</span>{% endif %}</p>
 <p>Name shown: {{ ex.name_text }} · age {{ ex.age or '-' }} · places {{ ex.places|join('; ') or '-' }} · phones {{ ex.phones|join(', ') or '-' }}</p>
 <p class="muted">First seen {{ r.first_seen }}, last seen {{ r.last_seen }}{% if r.verified_at %}, verified {{ r.verified_at }}{% endif %}{% if r.note %} · note: {{ r.note }}{% endif %}</p>
 {% if ex.snippet %}<pre>{{ ex.snippet }}</pre>{% endif %}

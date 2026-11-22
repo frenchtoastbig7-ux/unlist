@@ -9,6 +9,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import date
 
+from unlist.core import timeutil
 from unlist.core.timeutil import now_iso
 
 SENSITIVE = ("password", "security question", "social security", "ssn", "credit card",
@@ -35,16 +36,15 @@ def label_for(score: int) -> str:
 
 
 def _rows(conn: sqlite3.Connection, sql: str, *args) -> list[sqlite3.Row]:
-    try:
-        return conn.execute(sql, args).fetchall()
-    except sqlite3.OperationalError:
-        return []
+    # A failed query raises: scoring a section that could not be read as zero would
+    # report a lower exposure than the data supports.
+    return conn.execute(sql, args).fetchall()
 
 
 def exposure_score(
     conn: sqlite3.Connection, subject_id: str, today: date | None = None
 ) -> tuple[int, list[Component]]:
-    today = today or date.today()
+    today = today or timeutil.today()
     comps: list[Component] = []
 
     # People-search listings that are live right now: the thing a stranger uses to find you.

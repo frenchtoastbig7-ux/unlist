@@ -62,7 +62,9 @@ def record_browser(
     store.write_raw(raw_abs, cap.html)
     shot_rel = None
     if cap.png:
-        shot_abs = store.raw_path_for(tool, sha, "png", cap.captured_at, data_dir)
+        # named by its own hash: the same HTML can come with a different screenshot
+        shot_sha = store.sha256_hex(cap.png)
+        shot_abs = store.raw_path_for(tool, shot_sha, "png", cap.captured_at, data_dir)
         shot_abs = data_dir / "shots" / shot_abs.relative_to(data_dir / "raw")
         store.write_raw(shot_abs, cap.png)
         shot_rel = str(shot_abs.relative_to(data_dir))

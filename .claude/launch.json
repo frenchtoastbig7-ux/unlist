@@ -4,7 +4,7 @@
     {
       "name": "unlist-app",
       "runtimeExecutable": "uv",
-      "runtimeArgs": ["run", "unlist-app", "--no-browser", "--port", "8787"],
+      "runtimeArgs": ["run", "--extra", "app", "unlist-app", "--no-browser", "--port", "8787"],
       "port": 8787
     }
   ]

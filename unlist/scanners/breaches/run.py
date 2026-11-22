@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from dataclasses import dataclass, field
 
@@ -63,6 +64,21 @@ class ScanResult:
         }
 
 
+def _year(date: str | None) -> int | None:
+    m = re.match(r"(\d{4})", date or "")
+    return int(m.group(1)) if m else None
+
+
+def _same_incident(b: Breach, c: Breach) -> bool:
+    """A source's hit and the HIBP entry of the same name, unless their dates are years apart.
+
+    The same rule as the detail view's matcher: a name reused for a later incident keeps
+    the provider's own date and takes nothing from the catalog.
+    """
+    mine, theirs = _year(b.breach_date), _year(c.breach_date)
+    return mine is None or theirs is None or abs(mine - theirs) <= 1
+
+
 def _enrich(b: Breach, c: Breach) -> Breach:
     """Fill a bare hit from another source with what HIBP knows about the same breach."""
     classes = list(c.data_classes)
@@ -92,25 +108,23 @@ def _upsert_hit(
     capture_id: int | None,
     now: str,
     kind: str = "breach",
+    richer: bool = False,
 ) -> bool:
-    """Insert or refresh one hit. Returns True when it is new."""
-    existing = conn.execute(
-        "SELECT id FROM breach_hits WHERE subject_id=? AND identifier_value=? AND source=? "
-        "AND breach_name=?",
-        (subject_id, value, source, b.name),
-    ).fetchone()
-    if existing:
-        conn.execute(
-            "UPDATE breach_hits SET last_seen=?, data_classes_json=CASE WHEN ?='[]' THEN "
-            "data_classes_json ELSE ? END WHERE id=?",
-            (now, json.dumps(b.data_classes), json.dumps(b.data_classes), existing["id"]),
-        )
-        return False
-    conn.execute(
+    """Insert or refresh one hit. Returns True only when this call inserted the row.
+
+    richer says the answer behind capture_id describes the breach in more detail than a
+    plain lookup would (XposedOrNot analytics against check-email). A repeat sighting then
+    moves the evidence pointer to it and fills in what the row lacked; a plain answer
+    never replaces a detailed capture.
+    """
+    is_verified = None if b.is_verified is None else int(b.is_verified)
+    # ON CONFLICT rather than SELECT-then-INSERT: two scans of one subject may race here
+    cur = conn.execute(
         """INSERT INTO breach_hits(subject_id, identifier_id, identifier_value, source,
              breach_name, title, domain, breach_date, added_date, data_classes_json, pwn_count,
              is_verified, is_sensitive, capture_id, first_seen, last_seen, kind)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+           ON CONFLICT(subject_id, identifier_value, source, breach_name) DO NOTHING""",
         (
             subject_id,
             identifier_id,
@@ -123,7 +137,7 @@ def _upsert_hit(
             b.added_date,
             json.dumps(b.data_classes),
             b.pwn_count,
-            None if b.is_verified is None else int(b.is_verified),
+            is_verified,
             None if b.is_sensitive is None else int(b.is_sensitive),
             capture_id,
             now,
@@ -131,7 +145,29 @@ def _upsert_hit(
             kind,
         ),
     )
-    return True
+    if cur.rowcount == 1:
+        return True
+    key = (subject_id, value, source, b.name)
+    where = " WHERE subject_id=? AND identifier_value=? AND source=? AND breach_name=?"
+    classes = json.dumps(b.data_classes)
+    conn.execute(
+        "UPDATE breach_hits SET last_seen=?, data_classes_json=CASE WHEN ?='[]' THEN "
+        "data_classes_json ELSE ? END" + where,
+        (now, classes, classes, *key),
+    )
+    if richer:
+        conn.execute(
+            "UPDATE breach_hits SET capture_id=COALESCE(?, capture_id), "
+            "domain=COALESCE(domain, ?), breach_date=COALESCE(breach_date, ?), "
+            "pwn_count=COALESCE(pwn_count, ?), is_verified=COALESCE(is_verified, ?)" + where,
+            (capture_id, b.domain, b.breach_date, b.pwn_count, is_verified, *key),
+        )
+    else:
+        conn.execute(
+            "UPDATE breach_hits SET capture_id=COALESCE(capture_id, ?)" + where,
+            (capture_id, *key),
+        )
+    return False
 
 
 def set_metric(conn: sqlite3.Connection, subject_id: str, source: str, metric: str, value) -> None:
@@ -140,6 +176,13 @@ def set_metric(conn: sqlite3.Connection, subject_id: str, source: str, metric: s
         "VALUES (?,?,?,?,?) ON CONFLICT(subject_id, source, metric) DO UPDATE SET "
         "value_json=excluded.value_json, updated_at=excluded.updated_at",
         (subject_id, source, metric, json.dumps(value), now_iso()),
+    )
+
+
+def clear_metric(conn: sqlite3.Connection, subject_id: str, source: str, metric: str) -> None:
+    conn.execute(
+        "DELETE FROM subject_metrics WHERE subject_id=? AND source=? AND metric=?",
+        (subject_id, source, metric),
     )
 
 
@@ -200,13 +243,21 @@ def scan_breaches(
         phones=len(phones),
     )
 
-    def store(ident, source: str, hits: list[Breach], capture_id: int | None, kind: str) -> None:
+    def store(
+        ident,
+        source: str,
+        hits: list[Breach],
+        capture_id: int | None,
+        kind: str,
+        richer: bool = False,
+    ) -> None:
         now = now_iso()
         for b in hits:
-            if source != "hibp" and kind == "breach" and b.name in catalog:
-                b = _enrich(b, catalog[b.name])
+            known = catalog.get(b.name) if source != "hibp" and kind == "breach" else None
+            if known and _same_incident(b, known):
+                b = _enrich(b, known)
             new = _upsert_hit(
-                conn, subject_id, ident.id, ident.value, source, b, capture_id, now, kind
+                conn, subject_id, ident.id, ident.value, source, b, capture_id, now, kind, richer
             )
             if new:
                 res.new_hits += 1
@@ -223,8 +274,9 @@ def scan_breaches(
 
     hibp = HibpClient(fetcher, key)
     # The public breach list is keyless and fills in dates and data classes for names the
-    # other sources return bare, so it is fetched whatever sources were chosen.
-    r, catalog = hibp.all_breaches()
+    # other sources return bare, so it is fetched whatever sources were chosen. It goes
+    # through a client that holds no key, so the key is never sent with it.
+    r, catalog = HibpClient(fetcher).all_breaches()
     record_fetch(conn, TOOL, r, note="hibp breach list")
     if not r.ok:
         res.errors.append(f"hibp breach list: {r.reason or r.error or r.status}")
@@ -291,9 +343,15 @@ def scan_breaches(
                     store(ident, "xposedornot", hits, cid, "breach")
             else:
                 hits, metrics = parsed
-                store(ident, "xposedornot", hits, cid, "breach")
+                store(ident, "xposedornot", hits, cid, "breach", richer=True)
                 if metrics:
                     set_metric(conn, subject_id, "xposedornot", f"risk:{email}", metrics)
+                else:
+                    # A confirmed no-match: an earlier rating no longer describes the
+                    # address. When analytics is unavailable (the branch above) the old
+                    # rating is left alone, because nothing new is known.
+                    clear_metric(conn, subject_id, "xposedornot", f"risk:{email}")
+                conn.commit()
 
     if "leakcheck" in sources:
         for ident in usernames:
@@ -310,8 +368,17 @@ def scan_breaches(
             )
         if phones and lc_key:
             pro = LeakCheckProClient(fetcher, lc_key)
+            unattributed = 0
             for ident in phones:
-                r, hits = pro.query(ident.value[-10:], "phone")
+                # Assumption (the Pro API could not be checked offline): a North American
+                # number is queried in its ten-digit national form, any other number with
+                # its full digits. Whatever the provider matches on, a result is stored
+                # only when the phone it reports is this identifier's full number, so
+                # another number with the same tail is never recorded against the subject.
+                number = ident.value
+                national = number[1:] if len(number) == 11 and number.startswith("1") else number
+                r, hits = pro.query(national, "phone", phone=number)
+                unattributed += pro.unattributed
                 cid = record_fetch(
                     conn,
                     TOOL,
@@ -323,6 +390,10 @@ def scan_breaches(
                     failed("leakcheck-phone", "phone", r)
                 else:
                     store(ident, "leakcheck-pro", hits, cid, "breach")
+            if unattributed:
+                res.skipped["leakcheck-phone-unattributed"] = (
+                    f"{unattributed} result(s) not stored: they did not report the full number"
+                )
 
     conn.execute(
         "UPDATE scan_runs SET finished_at=?, counts_json=?, note=? WHERE id=?",

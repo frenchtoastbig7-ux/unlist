@@ -9,7 +9,7 @@
   <p>{{ result.queries|length }} quer{{ 'y' if result.queries|length == 1 else 'ies' }}, {{ result.mentions|length }} result(s).</p>
   <form method="post" action="/subjects/{{ sid }}/mentions/confirm">
   <table><tr><th></th><th>site</th><th>broker</th><th>title</th><th>snippet</th><th>recorded</th></tr>
-  {% for m in result.mentions %}<tr><td><input type="checkbox" name="url" value="{{ m.url }}" style="min-width:0"><input type="hidden" name="title:{{ m.url }}" value="{{ m.title }}"></td><td>{{ m.host }}</td><td>{{ m.broker_id or '' }}</td><td><a href="{{ m.url }}" target="_blank" rel="noreferrer">{{ m.title }}</a></td><td class="muted">{{ m.description|truncate(140) }}</td><td>{{ m.already or '' }}</td></tr>{% endfor %}
+  {% for m in result.mentions %}<tr><td><input type="checkbox" name="url" value="{{ m.url }}" aria-label="About {{ sid }}: {{ m.title }} ({{ m.host }})" style="min-width:0"><input type="hidden" name="title:{{ m.url }}" value="{{ m.title }}"></td><td>{{ m.host }}</td><td>{{ m.broker_id or '' }}</td><td>{% if m.url|http_url %}<a href="{{ m.url|http_url }}" target="_blank" rel="noreferrer">{{ m.title }}</a>{% else %}{{ m.title }}{% endif %}</td><td class="muted">{{ m.description|truncate(140) }}</td><td>{{ m.already or '' }}</td></tr>{% endfor %}
   </table>
   <button>Record the ticked pages as about {{ sid }}</button>
   </form>

@@ -101,6 +101,18 @@ class BrowserSession:
         assert self._ctx is not None
         page = self._ctx.new_page()
         note = None
+        # Status of each main-document response, in order: a challenge the operator
+        # clears is followed by a new document whose status is not the challenge's.
+        documents: list[int] = []
+
+        def on_response(response) -> None:
+            with contextlib.suppress(Exception):
+                request = response.request
+                if request.is_navigation_request() and request.frame == page.main_frame:
+                    documents.append(response.status)
+
+        with contextlib.suppress(Exception):
+            page.on("response", on_response)
         try:
             resp = page.goto(url, wait_until="domcontentloaded")
             status = resp.status if resp else None
@@ -110,6 +122,7 @@ class BrowserSession:
             html = page.content()
             challenged = looks_like_challenge(html)
             if challenged:
+                before = len(documents)
                 deadline = time.monotonic() + self.challenge_wait_s
                 while time.monotonic() < deadline:
                     page.wait_for_timeout(2_000)
@@ -117,6 +130,8 @@ class BrowserSession:
                     if not looks_like_challenge(html):
                         challenged = False
                         note = "site challenged; cleared by the operator in the browser"
+                        # the page now shown is not the one the first status described
+                        status = documents[-1] if len(documents) > before else None
                         break
                 if challenged:
                     note = f"site challenged; not cleared within {self.challenge_wait_s}s"

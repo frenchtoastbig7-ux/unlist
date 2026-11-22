@@ -40,10 +40,9 @@ def _kind(row: sqlite3.Row) -> str:
 
 
 def _rows(conn: sqlite3.Connection, sql: str, *args: object) -> list[sqlite3.Row]:
-    try:
-        return conn.execute(sql, args).fetchall()
-    except sqlite3.OperationalError:
-        return []
+    # A failed query must stop the export: swallowing it would print "None yet" and a
+    # zero count for a section that was never read.
+    return conn.execute(sql, args).fetchall()
 
 
 def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, dict]:
@@ -218,7 +217,11 @@ def exposure_markdown(conn: sqlite3.Connection, subject_id: str) -> tuple[str, d
     else:
         parts.append("None recorded. Run scan_usernames, scan_mentions or scan_domains.")
 
-    pw = _rows(conn, "SELECT * FROM password_checks ORDER BY checked_at DESC LIMIT 20")
+    # password_checks rows carry no subject, so with more than one subject on file a
+    # check (and its label) cannot be attributed and stays out of every subject's report.
+    pw = []
+    if len(_rows(conn, "SELECT id FROM subjects LIMIT 2")) == 1:
+        pw = _rows(conn, "SELECT * FROM password_checks ORDER BY checked_at DESC LIMIT 20")
     if pw:
         parts.append("\n## Password checks (counts only)\n")
         parts.append(

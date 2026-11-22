@@ -18,7 +18,7 @@ from unlist.core.timeutil import iso_z, now_iso
 from unlist.requests.basis import basis_for, channel_for, deadline_for, get_basis
 from unlist.scanners.brokers import findings as F
 from unlist.scanners.brokers.urls import STATE_NAMES
-from unlist.subjects import SubjectRepo
+from unlist.subjects import ConsentError, SubjectRepo
 from unlist.subjects.models import STATE_PRIVACY_LAWS, Subject
 
 TEMPLATES = Path(__file__).parent / "templates"
@@ -30,6 +30,7 @@ OPEN_STATES = (
     "drafted", "approved", "sent", "submitted", "awaiting_verification", "acknowledged", "overdue",
 )  # fmt: skip
 SENT_STATES = ("sent", "submitted", "awaiting_verification", "acknowledged", "overdue")
+CLOSED_STATES = ("completed", "verified_removed", "failed", "cancelled")
 
 _env = Environment(
     loader=FileSystemLoader(str(TEMPLATES)),
@@ -101,7 +102,7 @@ def render(
         "listings": listings,
         "tag": tag,
         "agent": subject.kind == "household",
-        "agent_instrument": subject.consent.instrument if subject.consent else "",
+        "reply_email": from_address or (emails[0] if emails else ""),
         "signature": subject.label,
         "state_name": STATE_NAMES.get(state, state),
         "law_name": law[0],
@@ -189,25 +190,76 @@ def events_for(conn: sqlite3.Connection, request_id: int) -> list[sqlite3.Row]:
     ).fetchall()
 
 
-def set_state(
+def _move_findings(
+    conn: sqlite3.Connection, row: sqlite3.Row, status: str, from_statuses: tuple[str, ...]
+) -> None:
+    """Move the request's findings to `status`, each only from one of `from_statuses`, inside
+    the caller's transaction: a finding the operator changed meanwhile is left alone."""
+    marks = ",".join("?" * len(from_statuses))
+    for fid in json.loads(row["finding_ids_json"] or "[]"):
+        before = conn.execute("SELECT status FROM findings WHERE id=?", (fid,)).fetchone()
+        if before is None or before["status"] == status:
+            continue
+        cur = conn.execute(
+            f"UPDATE findings SET status=?, status_changed_at=? WHERE id=? AND status IN ({marks})",
+            (status, now_iso(), fid, *from_statuses),
+        )
+        if cur.rowcount:
+            AuditLog().append(
+                "finding.status",
+                finding_id=fid,
+                subject=row["subject_id"],
+                broker=row["broker_id"],
+                from_status=before["status"],
+                to_status=status,
+                note=None,
+            )
+
+
+def transition(
     conn: sqlite3.Connection,
     request_id: int,
     state: str,
+    allowed_from: Iterable[str] | None,
     note: str | None = None,
     capture_id: int | None = None,
-) -> sqlite3.Row:
+    *,
+    if_deadline: str | None = None,
+    commit: bool = True,
+) -> bool:
+    """Move a request to `state` only if it is currently in one of `allowed_from` (None: from
+    any state) and, when given, its deadline is still `if_deadline`. Returns whether the
+    request moved; when it did not, nothing is written.
+
+    Anything that decides from a row it read earlier (the inbox, the form helper, the
+    monitor) goes through here, so a change the operator made in the meantime is never
+    overwritten. commit=False leaves the write in the caller's transaction."""
     if state not in STATES:
         raise ValueError(f"state must be one of {STATES}")
     row = get(conn, request_id)
     now = now_iso()
-    closed = now if state in ("completed", "verified_removed", "failed", "cancelled") else None
-    conn.execute(
+    closed = now if state in CLOSED_STATES else None
+    sql = (
         "UPDATE requests SET state=?, note=COALESCE(?, note), "
-        "closed_at=COALESCE(?, closed_at) WHERE id=?",
-        (state, note, closed, request_id),
+        "closed_at=COALESCE(?, closed_at) WHERE id=?"
     )
+    args: list[object] = [state, note, closed, request_id]
+    if allowed_from is not None:
+        allowed = tuple(allowed_from)
+        sql += " AND state IN ({})".format(",".join("?" * len(allowed)))
+        args.extend(allowed)
+    if if_deadline is not None:
+        sql += " AND deadline IS ?"
+        args.append(if_deadline)
+    if conn.execute(sql, args).rowcount == 0:
+        return False
     add_event(conn, request_id, f"state:{state}", note, capture_id)
-    conn.commit()
+    if state == "completed":
+        _move_findings(conn, row, "requested", ("confirmed",))
+    elif state == "verified_removed":
+        _move_findings(conn, row, "removed", ("requested", "confirmed"))
+    if commit:
+        conn.commit()
     AuditLog().append(
         "request.state",
         request_id=request_id,
@@ -217,15 +269,18 @@ def set_state(
         to_state=state,
         note=note,
     )
-    if state in ("completed", "verified_removed"):
-        for fid in json.loads(row["finding_ids_json"] or "[]"):
-            try:
-                if F.get(conn, fid)["status"] in ("requested", "confirmed"):
-                    F.set_status(
-                        conn, fid, "removed" if state == "verified_removed" else "requested"
-                    )
-            except KeyError:
-                pass
+    return True
+
+
+def set_state(
+    conn: sqlite3.Connection,
+    request_id: int,
+    state: str,
+    note: str | None = None,
+    capture_id: int | None = None,
+) -> sqlite3.Row:
+    """The operator's own decision: from any state. Automated callers use transition()."""
+    transition(conn, request_id, state, None, note, capture_id)
     return get(conn, request_id)
 
 
@@ -252,6 +307,8 @@ def draft_request(
         row = F.get(conn, fid)
         if row["subject_id"] != subject_id:
             raise ValueError(f"finding {fid} belongs to another subject")
+        if row["broker_id"] != broker_id:
+            raise ValueError(f"finding {fid} is a {row['broker_id']} listing, not {broker_id}")
         if row["status"] not in ("confirmed", "reappeared", "requested"):
             raise ValueError(f"finding {fid} is {row['status']}; confirm it first")
         listings.append(row["listing_url"])
@@ -333,9 +390,12 @@ def draft_blind(
 ) -> list[sqlite3.Row]:
     """Email requests to brokers you have no listing for: the Incogni approach. Every
     active catalog broker with an email address and no open request, optionally one
-    category, optionally only those in the California registry."""
+    category, optionally only those in the California registry. limit=None is no cap;
+    a limit of zero or less drafts nothing."""
+    out: list[sqlite3.Row] = []
+    if limit is not None and limit <= 0:
+        return out
     catalog = load_catalog()
-    out = []
     ordered = sorted(
         catalog,
         key=lambda b: (b.category != "people-search", not b.disclosures, b.id),
@@ -352,7 +412,7 @@ def draft_blind(
         if open_for_broker(conn, subject_id, b.id):
             continue
         out.append(draft_request(conn, subject_id, b.id, (), channel="email", **kw))
-        if limit and len(out) >= limit:
+        if limit is not None and len(out) >= limit:
             break
     return out
 
@@ -362,9 +422,12 @@ def approve(conn: sqlite3.Connection, request_ids: Iterable[int]) -> list[sqlite
     now = now_iso()
     for rid in request_ids:
         row = get(conn, rid)
-        if row["state"] != "drafted":
+        cur = conn.execute(
+            "UPDATE requests SET state='approved', approved_at=? WHERE id=? AND state='drafted'",
+            (now, rid),
+        )
+        if cur.rowcount == 0:
             continue
-        conn.execute("UPDATE requests SET state='approved', approved_at=? WHERE id=?", (now, rid))
         add_event(conn, rid, "state:approved")
         conn.commit()
         AuditLog().append(
@@ -374,29 +437,40 @@ def approve(conn: sqlite3.Connection, request_ids: Iterable[int]) -> list[sqlite
     return out
 
 
-def mark_sent(
+def mark_sent_if(
     conn: sqlite3.Connection,
     request_id: int,
-    state: str = "sent",
+    state: str,
+    allowed_from: Iterable[str] | None,
     detail: str | None = None,
     capture_id: int | None = None,
-) -> sqlite3.Row:
+    *,
+    sent_at: str | None = None,
+    commit: bool = True,
+) -> bool:
+    """Record that a request went out (state, sent_at, deadline), only if it is currently
+    in one of `allowed_from` (None: from any state). Returns whether it was recorded.
+    sent_at is when it actually went out, when that is not now."""
+    if state not in STATES:
+        raise ValueError(f"state must be one of {STATES}")
     row = get(conn, request_id)
-    now = now_iso()
-    deadline = iso_z(deadline_for(row["basis"], now))
-    conn.execute(
+    when = sent_at or now_iso()
+    deadline = iso_z(deadline_for(row["basis"], when))
+    sql = (
         "UPDATE requests SET state=?, sent_at=?, deadline=?, "
-        "capture_after=COALESCE(?, capture_after) WHERE id=?",
-        (state, now, deadline, capture_id, request_id),
+        "capture_after=COALESCE(?, capture_after) WHERE id=?"
     )
+    args: list[object] = [state, when, deadline, capture_id, request_id]
+    if allowed_from is not None:
+        allowed = tuple(allowed_from)
+        sql += " AND state IN ({})".format(",".join("?" * len(allowed)))
+        args.extend(allowed)
+    if conn.execute(sql, args).rowcount == 0:
+        return False
     add_event(conn, request_id, f"state:{state}", detail, capture_id)
-    for fid in json.loads(row["finding_ids_json"] or "[]"):
-        try:
-            if F.get(conn, fid)["status"] in ("confirmed", "reappeared"):
-                F.set_status(conn, fid, "requested")
-        except KeyError:
-            pass
-    conn.commit()
+    _move_findings(conn, row, "requested", ("confirmed", "reappeared"))
+    if commit:
+        conn.commit()
     AuditLog().append(
         "request.sent",
         request_id=request_id,
@@ -406,6 +480,20 @@ def mark_sent(
         state=state,
         deadline=deadline,
     )
+    return True
+
+
+def mark_sent(
+    conn: sqlite3.Connection,
+    request_id: int,
+    state: str = "sent",
+    detail: str | None = None,
+    capture_id: int | None = None,
+    *,
+    sent_at: str | None = None,
+) -> sqlite3.Row:
+    """The operator's own record that a request went out: from any state."""
+    mark_sent_if(conn, request_id, state, None, detail, capture_id, sent_at=sent_at)
     return get(conn, request_id)
 
 
@@ -445,6 +533,68 @@ def _send_priority(row: sqlite3.Row, catalog) -> tuple[int, int]:
     return rank, row["id"]
 
 
+@dataclass
+class SendPlan:
+    """What a send would do right now, without sending anything."""
+
+    send: list[sqlite3.Row]  # approved email requests that fit under today's cap, in order
+    held: list[sqlite3.Row]  # eligible, but over the cap; they stay approved
+    rejected: list[tuple[int, str]]  # (request id, why it is never sent as it stands)
+    cap: int
+    room: int  # how many more may go out today
+
+    @property
+    def held_reason(self) -> str:
+        return f"held: daily cap of {self.cap} reached; goes out on a later day"
+
+
+def plan_send(
+    conn: sqlite3.Connection,
+    request_ids: Iterable[int] | None = None,
+    *,
+    cap: int | None = None,
+) -> SendPlan:
+    """The selection send_approved uses, with no mailer call: which requests are eligible
+    (approved, email channel), in which order, and how many fit under today's cap. A dry
+    run shows this plan; the live send executes it."""
+    rejected: list[tuple[int, str]] = []
+    if request_ids is None:
+        rows = [r for r in list_for(conn, None, "approved") if r["channel"] == "email"]
+    else:
+        rows = []
+        for rid in dict.fromkeys(int(r) for r in request_ids):
+            try:
+                rows.append(get(conn, rid))
+            except KeyError:
+                rejected.append((rid, "no such request"))
+    catalog = load_catalog()
+    rows.sort(key=lambda r: _send_priority(r, catalog))
+    cap = daily_cap() if cap is None else cap
+    room = max(0, cap - sent_today(conn))
+    eligible: list[sqlite3.Row] = []
+    repo = SubjectRepo(conn)
+    consent: dict[str, str | None] = {}
+    for row in rows:
+        sid = row["subject_id"]
+        if sid not in consent:
+            try:
+                repo.require(sid)
+                consent[sid] = None
+            except ConsentError as exc:
+                consent[sid] = str(exc)
+        if consent[sid]:
+            rejected.append((row["id"], f"consent is not in force: {consent[sid]}"))
+        elif row["state"] != "approved":
+            rejected.append((row["id"], f"not approved (state {row['state']})"))
+        elif row["channel"] != "email":
+            rejected.append((row["id"], f"channel {row['channel']} is not sent by email"))
+        elif not row["to_address"]:
+            rejected.append((row["id"], "no recipient address"))
+        else:
+            eligible.append(row)
+    return SendPlan(eligible[:room], eligible[room:], rejected, cap, room)
+
+
 def send_approved(
     conn: sqlite3.Connection,
     mailer,
@@ -459,25 +609,18 @@ def send_approved(
     and the monitor's send_queue job sends the next share tomorrow. Nothing that is not
     approved is ever sent.
     """
-    if request_ids is None:
-        rows = [r for r in list_for(conn, None, "approved") if r["channel"] == "email"]
-    else:
-        rows = [get(conn, rid) for rid in request_ids]
-    catalog = load_catalog()
-    rows.sort(key=lambda r: _send_priority(r, catalog))
-    cap = daily_cap() if cap is None else cap
-    room = max(0, cap - sent_today(conn))
-    out: list[tuple[int, bool, str]] = []
-    for row in rows:
-        rid = row["id"]
+    plan = plan_send(conn, request_ids, cap=cap)
+    room = plan.room
+    out: list[tuple[int, bool, str]] = [(rid, False, why) for rid, why in plan.rejected]
+    for planned in (*plan.send, *plan.held):
+        rid = planned["id"]
+        if room <= 0:
+            out.append((rid, False, plan.held_reason))
+            continue
+        # The plan was read a moment ago; a request cancelled since then must not go out.
+        row = get(conn, rid)
         if row["state"] != "approved":
             out.append((rid, False, f"not approved (state {row['state']})"))
-            continue
-        if row["channel"] != "email":
-            out.append((rid, False, f"channel {row['channel']} is not sent by email"))
-            continue
-        if room <= 0:
-            out.append((rid, False, f"held: daily cap of {cap} reached; goes out on a later day"))
             continue
         try:
             msg_id = mailer.send(row["to_address"], row["subject_line"], row["body"], row["tag"])
@@ -487,9 +630,17 @@ def send_approved(
             out.append((rid, False, f"send failed: {exc}"))
             continue
         room -= 1
-        _store_sent_copy(conn, row)
+        # Delivery is recorded before anything else that can fail, so a problem keeping
+        # the sent copy never leaves a delivered request approved and sent a second time.
         mark_sent(conn, rid, "sent", f"to {row['to_address']}; message id {msg_id}")
-        out.append((rid, True, f"sent to {row['to_address']}"))
+        detail = f"sent to {row['to_address']}"
+        try:
+            _store_sent_copy(conn, row)
+        except Exception as exc:
+            add_event(conn, rid, "sent_copy_failed", str(exc))
+            conn.commit()
+            detail += f"; the sent copy could not be stored: {exc}"
+        out.append((rid, True, detail))
     return out
 
 
